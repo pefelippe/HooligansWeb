@@ -1,0 +1,63 @@
+# Blueprint do Render (plano free): API e game server. O web fica na Vercel.
+# Se o Render der outro nome de host aos serviços, ajuste as URLs abaixo e o apps/web/vercel.json.
+services:
+  - type: web
+    name: hooligans-api
+    runtime: node
+    plan: free
+    buildCommand: corepack enable && pnpm install --frozen-lockfile --prod=false
+    startCommand: pnpm --filter @torcidas/api start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: BETTER_AUTH_SECRET
+        generateValue: true
+      - key: MATCH_TICKET_SECRET
+        generateValue: true
+      - key: INTERNAL_SECRET
+        generateValue: true
+      - key: BETTER_AUTH_URL
+        value: https://hooligans-web.vercel.app
+      - key: WEB_ORIGIN
+        value: https://hooligans-web.vercel.app
+      - key: GAME_INTERNAL_URL
+        value: https://hooligans-game.onrender.com
+      - key: GAME_PUBLIC_URL
+        value: wss://hooligans-game.onrender.com
+
+  - type: web
+    name: hooligans-game
+    runtime: node
+    plan: free
+    buildCommand: corepack enable && pnpm install --frozen-lockfile --prod=false
+    startCommand: pnpm --filter @torcidas/game start
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: NODE_ENV
+        value: production
+      - key: GAME_PORT
+        value: "10000"
+      - key: API_INTERNAL_URL
+        value: https://hooligans-api.onrender.com
+      - key: GAME_PUBLIC_URL
+        value: wss://hooligans-game.onrender.com
+      - key: MATCH_TICKET_SECRET
+        fromService:
+          type: web
+          name: hooligans-api
+          envVarKey: MATCH_TICKET_SECRET
+      - key: INTERNAL_SECRET
+        fromService:
+          type: web
+          name: hooligans-api
+          envVarKey: INTERNAL_SECRET

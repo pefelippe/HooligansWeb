@@ -1,0 +1,7 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "rewrites": [
+    { "source": "/api/auth/:path*", "destination": "https://hooligans-api.onrender.com/api/auth/:path*" },
+    { "source": "/backend/:path*", "destination": "https://hooligans-api.onrender.com/:path*" }
+  ]
+}
