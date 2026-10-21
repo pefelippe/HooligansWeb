@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Combat Lab · Torcidas</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <div id="viewport">
+        <canvas id="scene"></canvas>
+        <div id="hud"></div>
+        <div id="help">
+          <b>WASD</b> mover · <b>Shift</b> correr · <b>Espaço</b> pular · <b>mouse</b> mirar · <b>LMB</b> leve · <b>RMB</b> pesado (segure p/ carregar) ·
+          <b>F</b> bloquear (parry no início) · <b>C</b> passo (correndo: rolamento) · <b>E</b> empurrão/cabeçada · <b>Q</b> chute (no ar: voadora) ·
+          <b>R</b> especial · <b>G</b> grito · <b>4</b> curativo ·
+          <b>Tab</b> lock-on · <b>P</b> pausa · <b>.</b> avança 1 tick · <b>1</b> câmera lenta · <b>H</b> hitboxes · <b>R</b> reset
+        </div>
+      </div>
+      <aside id="panel"></aside>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
