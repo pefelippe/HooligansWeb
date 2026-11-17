@@ -78,4 +78,5 @@ export const stats = pgTable('stats', {
   kos: integer('kos').notNull().default(0),
   deaths: integer('deaths').notNull().default(0),
   assists: integer('assists').notNull().default(0),
+  xp: integer('xp').notNull().default(0),
 });

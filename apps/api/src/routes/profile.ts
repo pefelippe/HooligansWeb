@@ -1,4 +1,4 @@
-import { getTorcida, nickVariants, validateNick, validateVisual } from '@torcidas/shared';
+import { getTorcida, matchXp, nickVariants, validateNick, validateVisual } from '@torcidas/shared';
 import { eq, inArray, sql } from 'drizzle-orm';
 import { fromNodeHeaders } from 'better-auth/node';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
@@ -90,16 +90,17 @@ export async function profileRoutes(app: FastifyInstance) {
     return { ticket, serverUrl: env.GAME_PUBLIC_URL, matchId };
   });
 
-  app.post<{ Body: { players?: { userId: string; kos: number; deaths: number; assists: number; won: boolean }[] } }>(
+  app.post<{ Body: { players?: { userId: string; kos: number; deaths: number; assists: number; captures?: number; won: boolean; mvp?: boolean }[] } }>(
     '/internal/match-result',
     async (req, reply) => {
       if (req.headers['x-internal-secret'] !== env.INTERNAL_SECRET) return reply.code(403).send({ error: 'proibido' });
       const n = (v: unknown) => (Number.isInteger(v) && (v as number) >= 0 && (v as number) < 10_000 ? (v as number) : 0);
       for (const pl of req.body?.players ?? []) {
         if (typeof pl.userId !== 'string') continue;
+        const xp = matchXp({ kos: n(pl.kos), assists: n(pl.assists), captures: n(pl.captures), won: pl.won === true, mvp: pl.mvp === true });
         await db
           .insert(schema.stats)
-          .values({ userId: pl.userId, matches: 1, wins: pl.won ? 1 : 0, kos: n(pl.kos), deaths: n(pl.deaths), assists: n(pl.assists) })
+          .values({ userId: pl.userId, matches: 1, wins: pl.won ? 1 : 0, kos: n(pl.kos), deaths: n(pl.deaths), assists: n(pl.assists), xp })
           .onConflictDoUpdate({
             target: schema.stats.userId,
             set: {
@@ -108,6 +109,7 @@ export async function profileRoutes(app: FastifyInstance) {
               kos: sql`${schema.stats.kos} + ${n(pl.kos)}`,
               deaths: sql`${schema.stats.deaths} + ${n(pl.deaths)}`,
               assists: sql`${schema.stats.assists} + ${n(pl.assists)}`,
+              xp: sql`${schema.stats.xp} + ${xp}`,
             },
           });
       }
