@@ -131,8 +131,13 @@ export function App() {
   if (match) {
     return (
       <Game
+        key={match.ticket}
         serverUrl={match.serverUrl}
         ticket={match.ticket}
+        onReconnect={() => {
+          setMatch(null);
+          void play();
+        }}
         onExit={() => {
           setMatch(null);
           void load();

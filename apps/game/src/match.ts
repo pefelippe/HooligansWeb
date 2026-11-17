@@ -58,12 +58,17 @@ export interface MatchOptions {
  */
 const MAX_REWIND = 15;
 
+/** Quem cai da conexão fica com a vaga (um bot joga no lugar) por 60 s; voltou, retoma o mesmo lutador. */
+export const RECONNECT_TICKS = 60 * 60;
+
 /** Uma partida. Na fila rápida, 10×10 com bots nas vagas sem humano; numa sala, o líder define os bots. */
 export class GameMatch {
   readonly state: MatchState;
   private readonly clients = new Map<string, MatchClient>();
   private readonly inputs = new Map<string, InputQueue>();
   private readonly brains = new Map<string, BotBrain>();
+  /** Humanos que caíram: tick até quando a vaga fica reservada. */
+  private readonly away = new Map<string, number>();
   /** Posições dos lutadores nos últimos MAX_REWIND ticks (por tick). */
   private readonly history = new Map<number, Map<string, Vec2>>();
   /** Atraso de cada cliente em ticks: o tick atual menos o tick que ele estava vendo. */
@@ -143,6 +148,8 @@ export class GameMatch {
   /** Expulso da sala: sai da partida sem bot no lugar e a conexão fecha. */
   kick(userId: string): void {
     this.kicked.add(userId);
+    this.away.delete(userId);
+    this.brains.delete(userId);
     const c = this.clients.get(userId);
     this.clients.delete(userId);
     this.inputs.delete(userId);
@@ -151,8 +158,14 @@ export class GameMatch {
     this.broadcastRoster();
   }
 
+  /** Vaga reservada para quem caiu e ainda pode voltar. */
+  isAway(userId: string): boolean {
+    return this.away.has(userId);
+  }
+
   join(c: MatchClient): boolean {
     if (this.kicked.has(c.userId)) return false;
+    if (this.away.delete(c.userId)) this.brains.delete(c.userId); // voltou: devolve o controle
     if (!this.state.roster[c.userId]) {
       if (this.humans(c.team) >= this.maxPerTeam) return false;
       // Fila rápida: o humano sempre tira um bot. Sala: só se o time estiver cheio.
@@ -171,6 +184,20 @@ export class GameMatch {
     this.inputs.delete(userId);
     const r = this.state.roster[userId];
     if (r && !r.bot && this.playing) {
+      // Segura a vaga: um bot controla o lutador até ele voltar ou o prazo acabar.
+      this.away.set(userId, this.state.sim.tick + RECONNECT_TICKS);
+      this.brains.set(userId, createBrain(userId, this.seed ^ this.botSeq++));
+    }
+  }
+
+  /** Prazo de volta acabou: sai de vez (na fila rápida, entra um bot no lugar). */
+  private expireAway(): void {
+    for (const [userId, until] of this.away) {
+      if (this.state.sim.tick < until) continue;
+      this.away.delete(userId);
+      this.brains.delete(userId);
+      const r = this.state.roster[userId];
+      if (!r) continue;
       removePlayer(this.state, userId);
       if (this.autoBots) this.addBot(r.team);
       this.broadcastRoster();
@@ -211,6 +238,7 @@ export class GameMatch {
     for (const [id, brain] of this.brains) inputs[id] = botInput(this.state, brain);
     const events = stepMatch(this.state, inputs, this.hooks);
     this.recordHistory();
+    if (this.away.size) this.expireAway();
     if (events.length) this.broadcast({ t: 'events', events });
     const sim = this.state.sim;
     const every = sim.fighters.length > BIG_MATCH ? SNAPSHOT_EVERY_BIG : SNAPSHOT_EVERY;

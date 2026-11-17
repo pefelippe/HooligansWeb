@@ -80,7 +80,7 @@ export async function profileRoutes(app: FastifyInstance) {
     const res = await fetch(`${env.GAME_INTERNAL_URL}/internal/allocate`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-internal-secret': env.INTERNAL_SECRET },
-      body: JSON.stringify({ team: torcida.team }),
+      body: JSON.stringify({ team: torcida.team, userId: user.id }),
     }).catch(() => null);
     if (!res?.ok) return reply.code(503).send({ error: 'servidor_de_jogo_indisponivel' });
     const { matchId } = (await res.json()) as { matchId: string };

@@ -40,13 +40,17 @@ async function reportResult(m: GameMatch, result: MatchResult): Promise<void> {
   }
 }
 
-/** Partida rápida aberta com vaga no time e pelo menos 1 min de jogo; senão cria uma. Partidas de sala ficam de fora. */
 /** Nível do ticket (assinado pela API); qualquer coisa estranha vira 1. */
 function ticketLevel(level: unknown): number {
   return Number.isInteger(level) && (level as number) >= 1 && (level as number) <= 1000 ? (level as number) : 1;
 }
 
-function allocate(team: TeamSide): GameMatch {
+/**
+ * Partida rápida: volta para a partida em que o jogador caiu (vaga reservada); senão uma aberta com
+ * vaga no time e pelo menos 1 min de jogo; senão cria uma. Partidas de sala ficam de fora.
+ */
+function allocate(team: TeamSide, userId: string | null): GameMatch {
+  if (userId) for (const m of matches.values()) if (m.roomId === null && m.playing && m.isAway(userId)) return m;
   for (const m of matches.values()) {
     if (m.roomId === null && m.playing && m.humans(team) < MATCH.teamSize && m.ticksLeft() > Math.min(60 * TICK_RATE, (durationTicks ?? MATCH.durationTicks) / 2)) return m;
   }
@@ -142,9 +146,9 @@ const http = createServer(async (req, res) => {
   }
   if (req.url === '/internal/allocate' && req.method === 'POST') {
     if (req.headers['x-internal-secret'] !== internalSecret) return json(403, { error: 'proibido' });
-    const body = (await readJson(req).catch(() => ({}))) as { team?: unknown };
+    const body = (await readJson(req).catch(() => ({}))) as { team?: unknown; userId?: unknown };
     if (!isTeam(body.team)) return json(400, { error: 'time_invalido' });
-    return json(200, { matchId: allocate(body.team).id });
+    return json(200, { matchId: allocate(body.team, typeof body.userId === 'string' ? body.userId : null).id });
   }
   if (req.url?.startsWith('/internal/rooms')) {
     if (req.headers['x-internal-secret'] !== internalSecret) return json(403, { error: 'proibido' });

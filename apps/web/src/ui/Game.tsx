@@ -77,9 +77,11 @@ interface Props {
   serverUrl: string;
   ticket: string;
   onExit: () => void;
+  /** Partida rápida: pede a vaga de volta (o servidor devolve a mesma partida). */
+  onReconnect?: () => void;
 }
 
-export function Game({ serverUrl, ticket, onExit }: Props) {
+export function Game({ serverUrl, ticket, onExit, onReconnect }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const minimapRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<GameEngine | null>(null);
@@ -784,7 +786,15 @@ export function Game({ serverUrl, ticket, onExit }: Props) {
           <div className="panel">
             <h2>Desconectado</h2>
             <p className="muted">{closed}</p>
-            <button className="primary" onClick={onExit}>
+            {onReconnect && (
+              <>
+                <p className="muted">Sua vaga fica guardada por 60 s (um bot joga por você enquanto isso).</p>
+                <button className="primary" onClick={onReconnect}>
+                  Voltar para a partida
+                </button>
+              </>
+            )}
+            <button className={onReconnect ? '' : 'primary'} onClick={onExit}>
               Voltar ao início
             </button>
           </div>

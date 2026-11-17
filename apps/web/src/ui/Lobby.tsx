@@ -84,6 +84,11 @@ export function Lobby({ ticket, serverUrl, onLeave }: Props) {
     onLeave();
   }
 
+  async function shareLink() {
+    // Cancelar a janela de compartilhar também cai no catch: não é erro.
+    await navigator.share({ title: `Torcidas · ${room?.nome ?? 'sala'}`, text: `Entra na minha sala (código ${room?.code})`, url: link }).catch(() => {});
+  }
+
   async function copyLink() {
     try {
       await navigator.clipboard.writeText(link);
@@ -163,6 +168,11 @@ export function Lobby({ ticket, serverUrl, onLeave }: Props) {
           <button className="secondary" onClick={copyLink}>
             {copied ? 'Link copiado!' : 'Copiar convite'}
           </button>
+          {'share' in navigator && (
+            <button className="secondary" onClick={() => void shareLink()}>
+              Compartilhar
+            </button>
+          )}
         </div>
       </header>
 
