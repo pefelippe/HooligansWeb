@@ -26,7 +26,7 @@ const tickDurations: number[] = [];
 async function reportResult(m: GameMatch, result: MatchResult): Promise<void> {
   const players = result.players
     .filter((p) => !p.bot)
-    .map((p) => ({ userId: p.id, kos: p.kos, deaths: p.deaths, assists: p.assists, won: result.winner === p.team }));
+    .map((p) => ({ userId: p.id, kos: p.kos, deaths: p.deaths, assists: p.assists, captures: p.captures, won: result.winner === p.team, mvp: result.mvp === p.id }));
   if (!players.length) return;
   try {
     const res = await fetch(`${API_URL}/internal/match-result`, {
@@ -232,6 +232,9 @@ wss.on('connection', (ws) => {
         break;
       case 'buy':
         joined.match.buy(joined.userId, String(msg.item));
+        break;
+      case 'equip':
+        joined.match.equip(joined.userId, String(msg.item));
         break;
       case 'ping':
         send({ t: 'pong', at: msg.at });

@@ -7,6 +7,7 @@ import {
   InputQueue,
   MATCH,
   matchBuy,
+  matchEquip,
   type MatchResult,
   type MatchState,
   type PlayerInput,
@@ -163,6 +164,11 @@ export class GameMatch {
     q.push(seq, input);
   }
 
+  equip(userId: string, item: string): void {
+    const r = matchEquip(this.state, userId, item);
+    if (r) this.clients.get(userId)?.send({ t: 'buyResult', ok: r.ok, item, ...(r.ok ? {} : { reason: r.reason }) });
+  }
+
   buy(userId: string, item: string): void {
     const r = matchBuy(this.state, userId, item);
     this.clients.get(userId)?.send({ t: 'buyResult', ok: r.ok, item, ...(r.ok ? {} : { reason: r.reason }) });
@@ -186,7 +192,7 @@ export class GameMatch {
       const match = toMatchInfo(this.state, ticksLeft(this.state));
       for (const c of this.clients.values()) {
         const self = sim.fighters.find((f) => f.id === c.userId);
-        c.send({ t: 'snapshot', tick: sim.tick, ackSeq: this.inputs.get(c.userId)?.ack ?? 0, match, fighters, ...(self ? { self } : {}) });
+        c.send({ t: 'snapshot', tick: sim.tick, ackSeq: this.inputs.get(c.userId)?.ack ?? 0, match, fighters, throws: sim.throwables ?? [], clouds: sim.clouds ?? [], ...(self ? { self } : {}) });
       }
     }
     if (!this.playing && this.state.result) {
