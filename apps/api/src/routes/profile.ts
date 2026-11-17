@@ -1,4 +1,4 @@
-import { getTorcida, matchXp, nickVariants, validateNick, validateVisual } from '@torcidas/shared';
+import { getTorcida, levelFromXp, matchXp, nickVariants, validateNick, validateVisual } from '@torcidas/shared';
 import { eq, inArray, sql } from 'drizzle-orm';
 import { fromNodeHeaders } from 'better-auth/node';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
@@ -86,7 +86,9 @@ export async function profileRoutes(app: FastifyInstance) {
     const { matchId } = (await res.json()) as { matchId: string };
     // Perfil que nunca escolheu visual ({}) vai sem: o cliente sorteia um pelo id, como nos bots.
     const visual = Object.keys(p.visual).length ? (validateVisual(p.visual) ?? undefined) : undefined;
-    const ticket = await signMatchTicket({ userId: user.id, matchId, team: torcida.team, nick: p.nick, serverUrl: env.GAME_PUBLIC_URL, ...(visual ? { visual } : {}) });
+    const [st] = await db.select({ xp: schema.stats.xp }).from(schema.stats).where(eq(schema.stats.userId, user.id));
+    const level = levelFromXp(st?.xp ?? 0).level;
+    const ticket = await signMatchTicket({ userId: user.id, matchId, team: torcida.team, nick: p.nick, level, serverUrl: env.GAME_PUBLIC_URL, ...(visual ? { visual } : {}) });
     return { ticket, serverUrl: env.GAME_PUBLIC_URL, matchId };
   });
 

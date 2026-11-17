@@ -224,19 +224,39 @@ const BASE_WEAPONS: BaseWeapon[] = [
   },
   {
     // Tiro em linha reta (clique), com 1 s entre um tiro e outro. Pesado e especial são coronhadas.
+    // Rara e cara: poucas balas e sem recarga; acabou, volta para a mochila de mãos vazias.
     id: 'pistola',
     nome: 'Pistola',
     tipo: 'perfurante',
     material: 'metal',
-    preco: 800,
+    preco: 1500,
     durabilidade: null,
+    municao: 8,
+    nivelMin: 3,
     blockAbsorb: 0.4,
     blockStability: 0.9,
     cooldown: 60,
     moves: {
-      // shortcut: o tiro atravessa carro e parede e pega todo mundo na linha; trocar por raycast no mapa se incomodar.
-      light: [light({ id: 'pistola.l1', startup: 6, active: 2, recovery: 12, damage: 30, staminaCost: 4, hitstun: 22, blockstun: 12, knockback: 2.5, hitstop: 4, cancelWindow: null, lunge: 0, hitbox: { shape: 'capsule', from: 0.4, to: 20, radius: 0.5 } })],
+      light: [light({ id: 'pistola.l1', startup: 6, active: 2, recovery: 12, damage: 30, staminaCost: 4, hitstun: 22, blockstun: 12, knockback: 2.5, hitstop: 4, cancelWindow: null, lunge: 0, shot: { fullRange: 8, minScale: 0.5 }, hitbox: { shape: 'capsule', from: 0.4, to: 20, radius: 0.5 } })],
       heavy: heavy({ id: 'pistola.h', damage: 14, hitbox: { shape: 'arc', range: 1.2, halfAngleDeg: 45 } }),
+    },
+  },
+  {
+    // Mais lento e mais forte que a pistola, 6 balas.
+    id: 'revolver',
+    nome: 'Revólver',
+    tipo: 'perfurante',
+    material: 'metal',
+    preco: 2200,
+    durabilidade: null,
+    municao: 6,
+    nivelMin: 6,
+    blockAbsorb: 0.4,
+    blockStability: 0.9,
+    cooldown: 80,
+    moves: {
+      light: [light({ id: 'revolver.l1', startup: 8, active: 2, recovery: 16, damage: 45, staminaCost: 4, hitstun: 28, blockstun: 16, knockback: 3.5, hitstop: 5, cancelWindow: null, lunge: 0, shot: { fullRange: 10, minScale: 0.5 }, hitbox: { shape: 'capsule', from: 0.4, to: 22, radius: 0.45 } })],
+      heavy: heavy({ id: 'revolver.h', damage: 14, hitbox: { shape: 'arc', range: 1.2, halfAngleDeg: 45 } }),
     },
   },
 ];
@@ -299,6 +319,7 @@ const SPECIALS: Record<string, MoveDef> = {
   taco: special({ id: 'taco.esp', startup: 16, active: 8, recovery: 32, damage: 16, knockback: 7, hitbox: { shape: 'arc', range: 2.0, halfAngleDeg: 180 } }),
   // Martelada: não dá para bloquear.
   pistola: special({ id: 'pistola.esp', startup: 10, damage: 18, knockdown: true, hitbox: { shape: 'arc', range: 1.3, halfAngleDeg: 50 } }),
+  revolver: special({ id: 'revolver.esp', startup: 10, damage: 18, knockdown: true, hitbox: { shape: 'arc', range: 1.3, halfAngleDeg: 50 } }),
   barra: special({ id: 'barra.esp', startup: 26, active: 5, recovery: 36, damage: 30, knockback: 5, knockdown: true, unblockable: true, armorTicks: 24, hitbox: { shape: 'arc', range: 2, halfAngleDeg: 35 } }),
 };
 

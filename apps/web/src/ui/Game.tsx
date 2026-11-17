@@ -1,4 +1,4 @@
-import { BANDAGEM, BOMBA, COLETE, CURATIVO, DEFAULT_COMBAT_DATA, GAS, type MatchResult, matchXp, shopItems, TORCIDAS, type WeaponDef } from '@torcidas/shared';
+import { BANDAGEM, BOMBA, COLETE, CURATIVO, DEFAULT_COMBAT_DATA, GAS, type MatchResult, matchXp, type ShopCategory, shopItems, TORCIDAS, type WeaponDef } from '@torcidas/shared';
 import { useEffect, useRef, useState } from 'react';
 import { GameEngine, type HudState } from '../game/engine';
 import { Crest, ItemIcon, Key, Meter, teamGlow } from './kit';
@@ -7,6 +7,12 @@ import './screens.css';
 
 const C = DEFAULT_COMBAT_DATA.constants;
 const ITEMS = shopItems();
+const CATEGORIES: [ShopCategory, string][] = [
+  ['branca', 'Armas brancas'],
+  ['arremessavel', 'Arremessáveis'],
+  ['fogo', 'Armas de fogo'],
+  ['equipamento', 'Equipamento'],
+];
 /** Roda de itens (Z): punhos, as armas da loja, os arremessáveis e o colete. */
 const WHEEL = [{ id: 'punhos', nome: 'Punhos' }, ...ITEMS.filter((i) => i.tipo === 'arma'), ...ITEMS.filter((i) => [BOMBA.id, GAS.id, COLETE.id].some((id) => id === i.id))];
 /** Fatia da roda para onde o mouse aponta (0 = topo, sentido horário), ou -1 no centro. */
@@ -22,6 +28,7 @@ const REASONS: Record<string, string> = {
   saldo_insuficiente: 'Saldo insuficiente',
   ja_possui: 'Essa arma já está com você (roda do mouse troca)',
   limite: 'Você já está no limite desse item',
+  nivel: 'Seu nível ainda não libera esse item',
   morto: 'Caído não compra: espere ser levantado ou renascer',
   partida_encerrada: 'A partida acabou',
 };
@@ -86,6 +93,7 @@ export function Game({ serverUrl, ticket, onExit }: Props) {
   const [hitDirs, setHitDirs] = useState<{ id: number; angle: number; power: number }[]>([]);
   const [showControls, setShowControls] = useState(false);
   const [pick, setPick] = useState(ITEMS[0]?.id ?? '');
+  const [cat, setCat] = useState<ShopCategory>('branca');
   const shopOpenRef = useRef(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuOpenRef = useRef(false);
@@ -219,7 +227,7 @@ export function Game({ serverUrl, ticket, onExit }: Props) {
   const canShop = me?.state !== 'downed';
   const itemState = (id: string) => {
     const it = ITEMS.find((i) => i.id === id);
-    if (!it || !me) return { owned: false, disabled: true, label: 'Comprar' };
+    if (!it || !me) return { owned: false, locked: false, disabled: true, label: 'Comprar' };
     const full: Record<string, boolean> = {
       [COLETE.id]: me.colete >= C.colete.hp,
       [BANDAGEM.id]: me.bandagens >= BANDAGEM.max,
@@ -228,8 +236,23 @@ export function Game({ serverUrl, ticket, onExit }: Props) {
       [CURATIVO.id]: me.curativos >= CURATIVO.maxPorJogador,
     };
     const owned = it.tipo === 'arma' ? me.weapon === it.id || me.bag.includes(it.id) : !!full[it.id];
-    const label = owned ? (it.tipo === 'arma' ? (me.weapon === it.id ? 'Equipada' : 'Na mochila') : 'Limite atingido') : !canShop ? 'Caído não compra' : me.money < it.preco ? 'Saldo insuficiente' : it.preco === 0 ? 'Pegar · grátis' : `Comprar · $${it.preco}`;
-    return { owned, disabled: owned || !canShop || me.money < it.preco, label };
+    const locked = me.level < it.nivelMin;
+    const label = owned
+      ? it.tipo === 'arma'
+        ? me.weapon === it.id
+          ? 'Equipada'
+          : 'Na mochila'
+        : 'Limite atingido'
+      : locked
+        ? `Libera no nível ${it.nivelMin}`
+        : !canShop
+          ? 'Caído não compra'
+          : me.money < it.preco
+            ? 'Saldo insuficiente'
+            : it.preco === 0
+              ? 'Pegar · grátis'
+              : `Comprar · $${it.preco}`;
+    return { owned, locked, disabled: owned || locked || !canShop || me.money < it.preco, label };
   };
   const sel = ITEMS.find((i) => i.id === pick) ?? ITEMS[0];
   const selWeapon = sel ? DEFAULT_COMBAT_DATA.weapons[sel.id] : undefined;
@@ -614,7 +637,14 @@ export function Game({ serverUrl, ticket, onExit }: Props) {
             {!canShop && <p className="banner danger">Caído não compra: espere ser levantado ou renascer.</p>}
             <div className="h-shop-body">
               <ul className="h-list">
-                {ITEMS.map((it) => {
+                <li className="h-tabs" role="tablist">
+                  {CATEGORIES.map(([id, nome]) => (
+                    <button key={id} role="tab" aria-selected={cat === id} className={cat === id ? 'on' : ''} onClick={() => setCat(id)}>
+                      {nome}
+                    </button>
+                  ))}
+                </li>
+                {ITEMS.filter((it) => it.categoria === cat).map((it) => {
                   const st = itemState(it.id);
                   return (
                     <li key={it.id}>
@@ -624,7 +654,7 @@ export function Game({ serverUrl, ticket, onExit }: Props) {
                         </span>
                         <b>{it.nome}</b>
                         <small>{st.owned ? (it.tipo === 'arma' ? (me.weapon === it.id ? 'Equipada' : 'Na mochila') : 'No limite') : it.tipo === 'arma' ? DEFAULT_COMBAT_DATA.weapons[it.id]?.tipo : it.id === BANDAGEM.id ? 'Cura rápida' : it.id === BOMBA.id || it.id === GAS.id ? 'Arremesso' : it.id === COLETE.id ? 'Proteção' : 'Consumível'}</small>
-                        <span className={me.money >= it.preco ? 'price' : 'price short'}>{it.preco === 0 ? 'Grátis' : `$${it.preco}`}</span>
+                        <span className={me.money >= it.preco && !st.locked ? 'price' : 'price short'}>{st.locked ? `Nv ${it.nivelMin}` : it.preco === 0 ? 'Grátis' : `$${it.preco}`}</span>
                       </button>
                     </li>
                   );
@@ -649,7 +679,9 @@ export function Game({ serverUrl, ticket, onExit }: Props) {
                           <Meter kind="stat" value={v} max={1} />
                         </div>
                       ))}
-                      <p className="muted">{selWeapon.durabilidade ? `Aguenta ${selWeapon.durabilidade} golpes.` : 'Não quebra.'} Fica com você mesmo se for nocauteado.</p>
+                      <p className="muted">
+                        {selWeapon.municao ? `${selWeapon.municao} balas, sem recarga: acabou, sai da mão. Parede e carro seguram o tiro.` : selWeapon.durabilidade ? `Aguenta ${selWeapon.durabilidade} golpes.` : 'Não quebra.'} Fica com você mesmo se for nocauteado.
+                      </p>
                     </>
                   ) : sel.id === COLETE.id ? (
                     <p className="muted">

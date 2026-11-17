@@ -32,6 +32,7 @@ export interface MatchClient {
   nick: string;
   team: TeamSide;
   visual?: CharacterVisual;
+  level?: number;
   send(msg: ServerMessage): void;
   /** Fecha a conexão (expulso da sala). */
   close(code: number, reason: string): void;
@@ -138,7 +139,7 @@ export class GameMatch {
       if (this.humans(c.team) >= this.maxPerTeam) return false;
       // Fila rápida: o humano sempre tira um bot. Sala: só se o time estiver cheio.
       if (this.autoBots || this.humans(c.team) + this.bots(c.team) >= this.maxPerTeam) this.removeOneBot(c.team);
-      addPlayer(this.state, { id: c.userId, nick: c.nick, team: c.team, bot: false, ...(c.visual ? { visual: c.visual } : {}) });
+      addPlayer(this.state, { id: c.userId, nick: c.nick, team: c.team, bot: false, ...(c.level ? { level: c.level } : {}), ...(c.visual ? { visual: c.visual } : {}) });
     }
     this.clients.set(c.userId, c);
     c.send({ t: 'welcome', you: c.userId, matchId: this.id, team: c.team, tick: this.state.sim.tick, seed: this.seed });

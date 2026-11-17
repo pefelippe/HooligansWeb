@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buy, canBuy, cloneSim, DEFAULT_CONSTANTS, ECONOMY } from '../src';
+import { buy, canBuy, cloneSim, DEFAULT_COMBAT_DATA, DEFAULT_CONSTANTS, ECONOMY, shotFalloff } from '../src';
 import { Buttons, duel, FACE_MINUS_Z, FACE_PLUS_Z, fighter, inp, ofType, run, tap } from './helpers';
 
 const { LIGHT, HEAVY, BLOCK, DODGE, SHOVE, KICK, RUN, JUMP } = Buttons;
@@ -359,15 +359,30 @@ describe('KO, respawn e economia', () => {
 describe('loja', () => {
   const sedes = [{ team: 0 as const, pos: { x: -20, z: 0 } }];
 
-  it('loja grátis e em qualquer lugar (até na sede do rival)', () => {
+  it('loja cobra o preço e funciona em qualquer lugar (até na sede do rival)', () => {
     const { s, data } = duel({ sedes, b: { pos: { x: -20, z: 0 } } });
     const b = fighter(s, 'b');
+    expect(ECONOMY.startMoney).toBe(1000);
     expect(buy(s, b, 'barra', data).ok).toBe(true);
     expect(b.weapon).toBe('barra');
-    expect(b.money).toBe(ECONOMY.startMoney);
-    expect(ECONOMY.startMoney).toBe(1000);
+    expect(b.money).toBe(ECONOMY.startMoney - (data.weapons.barra?.preco ?? 0));
   });
 
+  it('sem dinheiro ou sem nível, a compra é recusada e nada muda', () => {
+    const { s, data } = duel();
+    const b = fighter(s, 'b');
+    b.level = 99;
+    b.money = 100;
+    expect(buy(s, b, 'barra', data)).toEqual({ ok: false, reason: 'saldo_insuficiente' });
+    expect(b.money).toBe(100);
+    expect(b.weapon).toBe('punhos');
+    b.level = 1;
+    b.money = 9000;
+    expect(buy(s, b, 'pistola', data)).toEqual({ ok: false, reason: 'nivel' });
+    b.level = data.weapons.pistola?.nivelMin ?? 1;
+    expect(buy(s, b, 'pistola', data).ok).toBe(true);
+    expect(b.durability).toBe(data.weapons.pistola?.municao);
+  });
   it('colete segura metade do dano até gastar', () => {
     const { s, data } = duel();
     const b = fighter(s, 'b');
@@ -377,6 +392,36 @@ describe('loja', () => {
     const lost = DEFAULT_CONSTANTS.maxHp - b.hp;
     expect(lost).toBeGreaterThan(0);
     expect(DEFAULT_CONSTANTS.colete.hp - b.colete).toBeCloseTo(lost, 5);
+  });
+
+  it('tiro para na parede e acerta só o primeiro da fila', () => {
+    const wall = { x: 0, z: 6, hw: 3, hd: 0.3, h: 2.5, kind: 'muro' as const, color: '#000' };
+    const shoot = (t: number) => ({ a: inp(t === 1 ? LIGHT : 0, FACE_PLUS_Z), b: inp(0, FACE_MINUS_Z), c: inp(0, FACE_MINUS_Z) });
+    // Com a parede no meio: ninguém toma o tiro.
+    const blocked = duel({ a: { weapon: 'pistola' }, b: { pos: { x: 0, z: 12 } }, collision: { boxes: [wall], circles: [], halfW: 50, halfD: 50 } });
+    expect(ofType(run(blocked.s, blocked.data, 20, shoot), 'hit')).toHaveLength(0);
+    // Sem parede, dois na linha: só o da frente.
+    const open = duel({ a: { weapon: 'pistola' }, b: { pos: { x: 0, z: 6 } } });
+    open.s.fighters.push({ ...structuredClone(fighter(open.s, 'b')), id: 'c', pos: { x: 0, z: 12 } });
+    const hits = ofType(run(open.s, open.data, 20, shoot), 'hit');
+    expect(hits.map((h) => h.target)).toEqual(['b']);
+  });
+
+  it('dano do tiro cai com a distância', () => {
+    const def = DEFAULT_COMBAT_DATA.weapons.pistola!.moves.light[0]!;
+    expect(shotFalloff(def, 3)).toBe(1);
+    expect(shotFalloff(def, 20)).toBeCloseTo(def.shot!.minScale, 5);
+    expect(shotFalloff(def, 14)).toBeLessThan(1);
+  });
+
+  it('acabou a munição, a pistola sai da mão', () => {
+    const { s, data } = duel({ a: { weapon: 'pistola' }, b: { pos: { x: 0, z: 12 } } });
+    const a = fighter(s, 'a');
+    const ammo = data.weapons.pistola?.municao ?? 0;
+    const cd = data.weapons.pistola?.cooldown ?? 0;
+    const ev = run(s, data, ammo * cd + 5, (t) => ({ a: inp(t % cd === 1 ? LIGHT : 0, FACE_PLUS_Z), b: inp(0, FACE_MINUS_Z) }));
+    expect(ofType(ev, 'weaponBreak')).toHaveLength(1);
+    expect(a.weapon).toBe('punhos');
   });
 
   it('pistola acerta de longe e só atira de novo depois do intervalo', () => {

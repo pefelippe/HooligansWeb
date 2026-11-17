@@ -390,3 +390,21 @@ describe('fluidez', () => {
     expect(ofType(ev, 'hit').map((h) => h.move)).toEqual(['punhos.l1', 'punhos.l2']);
   });
 });
+
+describe('arremesso e parede', () => {
+  it('bomba bate na parede alta e cai antes dela; por cima de carro passa', () => {
+    const tall = { x: 0, z: 4, hw: 3, hd: 0.3, h: 6, kind: 'galpao' as const, color: '#000' };
+    const car = { x: 0, z: 4, hw: 3, hd: 0.3, h: 1.45, kind: 'carro' as const, color: '#000' };
+    for (const [box, blocked] of [[tall, true], [car, false]] as const) {
+      const { s, data } = duel({ b: { pos: { x: 30, z: 0 } }, collision: { boxes: [box], circles: [], halfW: 50, halfD: 50 } });
+      const a = fighter(s, 'a');
+      a.bombas = 1;
+      a.inHand = 'bomba';
+      run(s, data, 3, (t) => ({ a: inp(t === 1 ? Buttons.LIGHT : 0, 0), b: inp(0, 0) }));
+      const land = s.throwables?.[0]?.to;
+      expect(land).toBeDefined();
+      if (blocked) expect(land!.z).toBeLessThan(4);
+      else expect(land!.z).toBeCloseTo(data.constants.throwables.range, 5);
+    }
+  });
+});

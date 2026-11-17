@@ -56,9 +56,11 @@ export interface RosterEntry {
   bot: boolean;
   /** Visual do jogador. Bots não mandam: o cliente sorteia pelo id. */
   visual?: CharacterVisual;
+  /** Nível da conta (vem do ticket assinado pela API). */
+  level?: number;
 }
 
-export interface PlayerResult extends Omit<RosterEntry, 'visual'> {
+export interface PlayerResult extends Omit<RosterEntry, 'visual' | 'level'> {
   kos: number;
   deaths: number;
   assists: number;
@@ -169,7 +171,7 @@ export function addPlayer(m: MatchState, entry: RosterEntry): Fighter {
   if (existing) return existing;
   m.roster[entry.id] = entry;
   const index = m.sim.fighters.length;
-  const f = createFighter({ id: entry.id, team: entry.team, pos: spawnPoint(m.sim, entry.team, index), facing: entry.team === 0 ? Math.PI / 2 : -Math.PI / 2 });
+  const f = createFighter({ id: entry.id, team: entry.team, level: entry.level ?? 1, pos: spawnPoint(m.sim, entry.team, index), facing: entry.team === 0 ? Math.PI / 2 : -Math.PI / 2 });
   // Entrar já com a proteção de spawn.
   f.protectedUntil = m.sim.tick + 180;
   m.sim.fighters.push(f);

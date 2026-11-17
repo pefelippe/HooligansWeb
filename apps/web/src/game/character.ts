@@ -634,7 +634,8 @@ export class CharacterView {
         this.weapon.add(can);
         break;
       }
-      case 'pistola': {
+      case 'pistola':
+      case 'revolver': {
         // Cano para a frente da mão, cabo descendo.
         this.weapon.rotation.x = 0;
         const barrel = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.05, 0.2), dark);

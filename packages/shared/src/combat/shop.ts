@@ -1,12 +1,12 @@
 import { type Fighter, isAlive, isStanding } from './fsm';
-import type { SimState } from './sim';
+import { freshDurability, type SimState } from './sim';
 import type { CombatData } from './types';
 import { DEFAULT_COMBAT_DATA } from './weapons';
 
-// Loja da partida (tecla J): de graça e em qualquer lugar (menos caído no chão).
+// Loja da partida (tecla J): em qualquer lugar (menos caído no chão). Dinheiro só vale na partida.
 
-/** Tudo de graça por enquanto. false volta aos preços de cada item. */
-export const FREE_SHOP = true;
+/** true deixa tudo de graça (testes de ajuste). */
+export const FREE_SHOP = false;
 
 export const CURATIVO = {
   id: 'curativo',
@@ -25,30 +25,37 @@ export const GAS = { id: 'gas', nome: 'Gás lacrimogêneo', preco: 300, max: 2 }
 /** Colete: compra enche os pontos dele (constants.colete). */
 export const COLETE = { id: 'colete', nome: 'Colete', preco: 400 } as const;
 
+export type ShopCategory = 'branca' | 'arremessavel' | 'fogo' | 'equipamento';
+
 export interface ShopItem {
   id: string;
   nome: string;
   preco: number;
   tipo: 'arma' | 'item';
+  categoria: ShopCategory;
+  /** Nível da conta para comprar (1 = livre). */
+  nivelMin: number;
 }
 
 export function shopItems(data: CombatData = DEFAULT_COMBAT_DATA): ShopItem[] {
   const armas = Object.values(data.weapons)
     .filter((w): w is typeof w & { preco: number } => w.preco !== null)
-    .map((w) => ({ id: w.id, nome: w.nome, preco: FREE_SHOP ? 0 : w.preco, tipo: 'arma' as const }));
-  const itens: ShopItem[] = [CURATIVO, BANDAGEM, BOMBA, GAS, COLETE].map((i) => ({ id: i.id, nome: i.nome, preco: FREE_SHOP ? 0 : i.preco, tipo: 'item' }));
+    .map((w): ShopItem => ({ id: w.id, nome: w.nome, preco: FREE_SHOP ? 0 : w.preco, tipo: 'arma', categoria: w.municao ? 'fogo' : 'branca', nivelMin: w.nivelMin ?? 1 }));
+  const item = (i: { id: string; nome: string; preco: number }, categoria: ShopCategory): ShopItem => ({ id: i.id, nome: i.nome, preco: FREE_SHOP ? 0 : i.preco, tipo: 'item', categoria, nivelMin: 1 });
+  const itens = [item(BOMBA, 'arremessavel'), item(GAS, 'arremessavel'), item(CURATIVO, 'equipamento'), item(BANDAGEM, 'equipamento'), item(COLETE, 'equipamento')];
   return [...armas, ...itens];
 }
 
 export type BuyResult =
   | { ok: true; item: ShopItem }
-  | { ok: false; reason: 'item_inexistente' | 'morto' | 'saldo_insuficiente' | 'ja_possui' | 'limite' };
+  | { ok: false; reason: 'item_inexistente' | 'morto' | 'saldo_insuficiente' | 'ja_possui' | 'limite' | 'nivel' };
 
 export function canBuy(s: SimState, f: Fighter, itemId: string, data: CombatData = DEFAULT_COMBAT_DATA): BuyResult {
   const item = shopItems(data).find((i) => i.id === itemId);
   if (!item) return { ok: false, reason: 'item_inexistente' };
   // Caído no chão não compra (ainda dá para ser levantado ou finalizado). Nocauteado compra para renascer com.
   if (isAlive(f) && !isStanding(f)) return { ok: false, reason: 'morto' };
+  if (f.level < item.nivelMin) return { ok: false, reason: 'nivel' };
   if (f.money < item.preco) return { ok: false, reason: 'saldo_insuficiente' };
   if (item.tipo === 'arma' && (f.weapon === item.id || f.bag.some((w) => w.id === item.id))) return { ok: false, reason: 'ja_possui' };
   if (item.id === CURATIVO.id && f.curativos >= CURATIVO.maxPorJogador) return { ok: false, reason: 'limite' };
@@ -69,7 +76,7 @@ export function buy(s: SimState, f: Fighter, itemId: string, data: CombatData = 
     f.bag.push({ id: f.weapon, durability: f.durability });
     f.weapon = r.item.id;
     f.inHand = null;
-    f.durability = data.weapons[r.item.id]?.durabilidade ?? null;
+    f.durability = freshDurability(data.weapons[r.item.id]);
   } else if (r.item.id === BANDAGEM.id) {
     f.bandagens = Math.min(BANDAGEM.max, f.bandagens + BANDAGEM.pacote);
   } else if (r.item.id === BOMBA.id) {

@@ -55,6 +55,8 @@ export interface Bleed {
 export interface Fighter {
   id: string;
   team: TeamSide;
+  /** Nível da conta: só a loja olha. */
+  level: number;
   pos: Vec2;
   /** Altura do pé em relação ao chão (pulo) e velocidade vertical. */
   y: number;

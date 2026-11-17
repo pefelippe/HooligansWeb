@@ -73,6 +73,11 @@ export interface MoveDef {
   low?: boolean;
   /** Vários acertos no mesmo active: a lista de alvos zera a cada `interval` frames. */
   multiHit?: { interval: number; finalKnockdown?: boolean };
+  /**
+   * Tiro: acerta só o primeiro lutador na linha e para no primeiro obstáculo do mapa.
+   * Dano cheio até `fullRange` m, caindo linearmente até `minScale` no fim do alcance.
+   */
+  shot?: { fullRange: number; minScale: number };
   /** Em vez de hitstun, atordoa (staggered) por N ticks. */
   stunTicks?: number;
   /** Acúmulos de sangramento aplicados por acerto (padrão 1 se `bleed`). */
@@ -101,8 +106,12 @@ export interface WeaponDef {
   blockAbsorb: number;
   /** Divide o dreno de estamina ao bloquear (maior = bloqueia melhor). */
   blockStability: number;
-  /** Ticks mínimos entre um golpe leve e o próximo (pistola). */
+  /** Ticks mínimos entre um golpe leve e o próximo (armas de fogo). */
   cooldown?: number;
+  /** Arma de fogo: balas no pente. Acabou, a arma sai da mão (não tem recarga). */
+  municao?: number;
+  /** Nível mínimo da conta para comprar (progressão). */
+  nivelMin?: number;
   moves: {
     light: readonly MoveDef[];
     heavy: MoveDef;

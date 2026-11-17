@@ -36,6 +36,9 @@ import { buildScene } from './scene';
 import { setMusicIntensity, startMusic, stopMusic, toggleMusic, isMusicOn } from './music';
 import { type HitMaterial, isMuted, playSound, type SoundName, setMuted } from './sfx';
 
+/** Golpes que são tiro (pelo id do golpe: o tiro em curso continua mesmo se a última bala tirou a arma da mão). */
+const SHOT_MOVES = new Map(Object.values(DEFAULT_COMBAT_DATA.weapons).flatMap((w) => w.moves.light.filter((m) => m.shot).map((m) => [m.id, m] as const)));
+
 export interface HudState {
   connected: boolean;
   you: string | null;
@@ -482,10 +485,13 @@ export class GameEngine {
       const big = f.move.endsWith('.h') || f.move.endsWith('.esp') || def?.id === 'taco' || def?.id === 'barra';
       this.sfxAt(big ? 'bigWhoosh' : 'whoosh', f.pos, undefined, 0.8);
     }
-    // Tiro da pistola: traço e estampido no primeiro frame ativo.
-    const shot = f.state === 'attack' && f.move === 'pistola.l1' ? DEFAULT_COMBAT_DATA.weapons.pistola?.moves.light[0] : undefined;
+    // Tiro: traço (até a primeira parede) e estampido no primeiro frame ativo.
+    const shot = f.state === 'attack' && f.move ? SHOT_MOVES.get(f.move) : undefined;
     if (shot && f.stateTick > shot.startup && p.stateTick <= shot.startup) {
-      this.throwFx?.shot(f.pos, f.facing, shot.hitbox.shape === 'capsule' ? shot.hitbox.to : 20);
+      const range = shot.hitbox.shape === 'capsule' ? shot.hitbox.to : 20;
+      const dir = dirFromYaw(f.facing);
+      const free = this.map ? segmentBoxHit(this.map.boxes, { x: f.pos.x, y: 1.35, z: f.pos.z }, { x: f.pos.x + dir.x * range, y: 1.35, z: f.pos.z + dir.z * range }) : 1;
+      this.throwFx?.shot(f.pos, f.facing, range * free);
       this.sfxAt('guardbreak', f.pos, undefined, 1.2);
     }
     if (f.y > 0.05 && p.y <= 0.05) this.sfxAt('jump', f.pos, undefined, 0.7);
@@ -853,7 +859,7 @@ export class GameEngine {
     if (!me || me.lockTarget) return this.yaw;
     // Pistola e arremesso: sem assistência de soco. A mira do centro da tela passa pelo ombro (SHOULDER),
     // então o tiro sai do boneco em direção ao ponto que a mira aponta a D metros.
-    if (me.weapon === 'pistola' || me.inHand) {
+    if (DEFAULT_COMBAT_DATA.weapons[me.weapon]?.municao || me.inHand) {
       const D = me.inHand ? DEFAULT_CONSTANTS.throwables.range : 15;
       const fwd = dirFromYaw(this.yaw);
       const right = dirFromYaw(this.yaw - Math.PI / 2);

@@ -24,6 +24,7 @@ export interface RoomMember {
   nick: string;
   team: TeamSide;
   visual?: CharacterVisual;
+  level?: number;
   send(msg: LobbyServerMessage): void;
   close(code: number, reason: string): void;
 }
@@ -183,6 +184,7 @@ export class Room {
       nick: m.nick,
       serverUrl: this.deps.serverUrl,
       ...(m.visual ? { visual: m.visual } : {}),
+      ...(m.level ? { level: m.level } : {}),
     });
     this.members.get(userId)?.send({ t: 'matchStart', ticket, serverUrl: this.deps.serverUrl });
   }

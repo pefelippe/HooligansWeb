@@ -1,4 +1,4 @@
-import { getTorcida, ROOM, validateVisual } from '@torcidas/shared';
+import { getTorcida, levelFromXp, ROOM, validateVisual } from '@torcidas/shared';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { db, schema } from '../db';
@@ -28,7 +28,8 @@ export async function roomRoutes(app: FastifyInstance) {
     if (!p || !torcida) return void reply.code(400).send({ error: 'sem_perfil' });
     if (p.bannedUntil && p.bannedUntil > new Date()) return void reply.code(403).send({ error: 'banido' });
     const visual = Object.keys(p.visual).length ? (validateVisual(p.visual) ?? undefined) : undefined;
-    return { userId: user.id, nick: p.nick, team: torcida.team, ...(visual ? { visual } : {}) };
+    const [st] = await db.select({ xp: schema.stats.xp }).from(schema.stats).where(eq(schema.stats.userId, user.id));
+    return { userId: user.id, nick: p.nick, team: torcida.team, level: levelFromXp(st?.xp ?? 0).level, ...(visual ? { visual } : {}) };
   }
 
   async function ticketFor(pl: NonNullable<Awaited<ReturnType<typeof player>>>, roomId: string) {

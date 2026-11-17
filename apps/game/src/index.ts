@@ -41,6 +41,11 @@ async function reportResult(m: GameMatch, result: MatchResult): Promise<void> {
 }
 
 /** Partida rápida aberta com vaga no time e pelo menos 1 min de jogo; senão cria uma. Partidas de sala ficam de fora. */
+/** Nível do ticket (assinado pela API); qualquer coisa estranha vira 1. */
+function ticketLevel(level: unknown): number {
+  return Number.isInteger(level) && (level as number) >= 1 && (level as number) <= 1000 ? (level as number) : 1;
+}
+
 function allocate(team: TeamSide): GameMatch {
   for (const m of matches.values()) {
     if (m.roomId === null && m.playing && m.humans(team) < MATCH.teamSize && m.ticksLeft() > Math.min(60 * TICK_RATE, (durationTicks ?? MATCH.durationTicks) / 2)) return m;
@@ -199,7 +204,7 @@ wss.on('connection', (ws) => {
         const room = rooms.get(payload.roomId);
         if (!room) return ws.close(4005, 'sala não existe');
         const visual = validateVisual(payload.visual) ?? undefined;
-        const member = { userId: payload.userId, nick: payload.nick, team: payload.team, ...(visual ? { visual } : {}), send: sendLobby, close: (code: number, reason: string) => ws.close(code, reason) };
+        const member = { userId: payload.userId, nick: payload.nick, team: payload.team, level: ticketLevel(payload.level), ...(visual ? { visual } : {}), send: sendLobby, close: (code: number, reason: string) => ws.close(code, reason) };
         const err = room.join(member);
         if (err) return ws.close(err === 'expulso' ? 4009 : 4006, err);
         lobby = { room, userId: payload.userId, send: sendLobby };
@@ -219,7 +224,7 @@ wss.on('connection', (ws) => {
         // O ticket é assinado pela API, mas o visual é revalidado aqui (formato desconhecido = sem visual).
         const visual = validateVisual(payload.visual) ?? undefined;
         const close = (code: number, reason: string) => ws.close(code, reason);
-        if (!match.join({ userId: payload.userId, nick: payload.nick, team: payload.team, ...(visual ? { visual } : {}), send, close })) return ws.close(4006, 'sem vaga na partida');
+        if (!match.join({ userId: payload.userId, nick: payload.nick, team: payload.team, level: ticketLevel(payload.level), ...(visual ? { visual } : {}), send, close })) return ws.close(4006, 'sem vaga na partida');
         joined = { match, userId: payload.userId };
       } catch {
         ws.close(4004, 'ticket inválido');

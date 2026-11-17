@@ -15,10 +15,10 @@ import {
 } from './fsm';
 import { angleDiff, dirFromYaw, dist, hitboxOverlaps, relativeAngleDeg, turnToward, yawTo } from './geometry';
 import { Buttons, NEUTRAL_INPUT, type PlayerInput, sanitizeInput } from './input';
-import type { CombatData, MoveDef, TeamSide, Vec2 } from './types';
+import type { CombatData, MoveDef, TeamSide, Vec2, WeaponDef } from './types';
 import { TICK_RATE } from './types';
 import { DEFAULT_COMBAT_DATA } from './weapons';
-import { type GameMap, resolveCircleCollision } from '../map';
+import { type GameMap, resolveCircleCollision, segmentBoxHit } from '../map';
 
 // Simulação de combate com tick fixo de 60 Hz. Determinística: mesmo estado + mesmos
 // inputs = mesmo resultado. Roda igual no servidor (autoritativo), no cliente
@@ -114,6 +114,8 @@ export interface NewFighter {
   pos?: Vec2;
   facing?: number;
   weapon?: string;
+  /** Nível da conta (loja). Bots e testes: 1. */
+  level?: number;
 }
 
 /** "Nunca aconteceu": tick bem no passado. Finito para o estado sobreviver a JSON (rede/predição). */
@@ -125,6 +127,7 @@ export function createFighter(nf: NewFighter, data: CombatData = DEFAULT_COMBAT_
   return {
     id: nf.id,
     team: nf.team,
+    level: nf.level ?? 1,
     pos: { ...(nf.pos ?? { x: 0, z: 0 }) },
     y: 0,
     vy: 0,
@@ -155,7 +158,7 @@ export function createFighter(nf: NewFighter, data: CombatData = DEFAULT_COMBAT_
     hitstop: 0,
     protectedUntil: 0,
     weapon,
-    durability: data.weapons[weapon]?.durabilidade ?? null,
+    durability: freshDurability(data.weapons[weapon]),
     bag: weapon === 'punhos' ? [] : [{ id: 'punhos', durability: null }],
     bleeds: [],
     damagedBy: {},
@@ -639,6 +642,8 @@ function tryStart(s: SimState, f: Fighter, action: BufferedAction, data: CombatD
       if (w.cooldown && s.tick < f.shotReadyTick) return false;
       const ok = first ? startAttack(s, f, first, 0, data) : false;
       if (ok && w.cooldown) f.shotReadyTick = s.tick + w.cooldown;
+      // Arma de fogo: gasta a bala no disparo. O tiro em curso continua (o golpe já está em f.move).
+      if (ok && w.municao && f.durability !== null && --f.durability <= 0) breakWeapon(s, f, data, events);
       return ok;
     }
     case 'heavy': {
@@ -752,7 +757,10 @@ function resolveHits(s: SimState, data: CombatData, events: SimEvent[]): void {
         m.hitIds = [];
       }
     }
+    // Tiro: uma bala, um alvo (o mais perto na linha), e só se nenhum obstáculo estiver no caminho.
+    const shotTarget = m.def.shot ? firstInLine(s, a, m, c.hurtRadius) : undefined;
     for (const t of s.fighters) {
+      if (m.def.shot && t !== shotTarget) continue;
       if (t === a || t.team === a.team || m.hitIds.includes(t.id) || !isAlive(t)) continue;
       if (m.def.low && t.y > c.kickMaxTargetHeight) continue; // pulou o golpe baixo
       if (!hitboxOverlaps(m.def.hitbox, a.pos, a.facing, t.pos, c.hurtRadius)) continue;
@@ -771,6 +779,23 @@ function resolveHits(s: SimState, data: CombatData, events: SimEvent[]): void {
     }
   }
   for (const p of pending) applyHit(s, p, data, events);
+}
+
+/** Altura do cano e do peito para o teste de obstáculo do tiro (m). */
+const SHOT_FROM_Y = 1.35;
+const SHOT_TO_Y = 1.2;
+
+function firstInLine(s: SimState, a: Fighter, m: ActiveMove, hurtRadius: number): Fighter | undefined {
+  if (m.hitIds.length) return undefined; // a bala já acertou alguém
+  let best: Fighter | undefined;
+  for (const t of s.fighters) {
+    if (t === a || t.team === a.team || !isAlive(t)) continue;
+    if (!hitboxOverlaps(m.def.hitbox, a.pos, a.facing, t.pos, hurtRadius)) continue;
+    if (!best || dist(a.pos, t.pos) < dist(a.pos, best.pos)) best = t;
+  }
+  if (!best || !s.collision) return best;
+  const blocked = segmentBoxHit(s.collision.boxes, { x: a.pos.x, y: SHOT_FROM_Y, z: a.pos.z }, { x: best.pos.x, y: SHOT_TO_Y, z: best.pos.z }) < 1;
+  return blocked ? undefined : best;
 }
 
 function applyHit(s: SimState, { attacker: a, target: t, move: m }: PendingHit, data: CombatData, events: SimEvent[]): void {
@@ -952,6 +977,9 @@ function knockAway(e: Fighter, from: Vec2, force: number, data: CombatData): voi
   enterState(e, 'knockdown', data.constants.knockdownTicks);
 }
 
+/** Altura do arremesso para o teste de parede: acima de carro (1,45) e grade (2,2). */
+const THROW_ARC_Y = 2.4;
+
 function throwItem(s: SimState, f: Fighter, kind: Throwable['kind'], yaw: number, data: CombatData, events: SimEvent[]): void {
   const c = data.constants.throwables;
   if (kind === 'bomba') f.bombas--;
@@ -961,8 +989,11 @@ function throwItem(s: SimState, f: Fighter, kind: Throwable['kind'], yaw: number
   f.protectedUntil = 0; // arremessar cancela a proteção de spawn, como atacar
   f.facing = yaw;
   const d = dirFromYaw(yaw);
-  // shortcut: o arremesso passa por cima de tudo (arco alto); trocar por raycast se jogar através de galpão virar problema.
-  const to = { x: f.pos.x + d.x * c.range, z: f.pos.z + d.z * c.range };
+  // O arco passa por cima de carro e grade, mas bate em parede alta (galpão, ônibus, quiosque) e cai ali.
+  const far = { x: f.pos.x + d.x * c.range, y: THROW_ARC_Y, z: f.pos.z + d.z * c.range };
+  const free = s.collision ? segmentBoxHit(s.collision.boxes, { x: f.pos.x, y: THROW_ARC_Y, z: f.pos.z }, far) : 1;
+  const reach = Math.max(0, free * c.range - (free < 1 ? 0.6 : 0));
+  const to = { x: f.pos.x + d.x * reach, z: f.pos.z + d.z * reach };
   (s.throwables ??= []).push({ kind, owner: f.id, team: f.team, from: { ...f.pos }, to, t0: s.tick, t1: s.tick + c.flightTicks });
   events.push({ type: 'throw', tick: s.tick, fighter: f.id, kind });
 }
@@ -1003,6 +1034,7 @@ function rawDamage(a: Fighter, t: Fighter, m: ActiveMove, tick: number, data: Co
   const c = data.constants;
   const def = m.def;
   let dmg = def.damage * (1 + (def.chargeDamageBonus ?? 0) * m.charge);
+  if (def.shot) dmg *= shotFalloff(def, dist(a.pos, t.pos));
   const backstab = !!def.backstabMultiplier && (!!def.alwaysBackstab || relativeAngleDeg(t.pos, t.facing, a.pos) >= c.backstabMinAngleDeg);
   if (backstab) dmg *= def.backstabMultiplier ?? 1;
   const counter = tick <= a.counterUntil;
@@ -1039,17 +1071,36 @@ function addBleed(t: Fighter, sourceId: string, data: CombatData): void {
   t.bleeds.push({ ticksLeft: b.duration, sourceId });
 }
 
+/** Durabilidade (ou balas, arma de fogo) de uma arma nova. */
+export function freshDurability(w: WeaponDef | undefined): number | null {
+  return w?.durabilidade ?? w?.municao ?? null;
+}
+
+/** Fator do dano do tiro pela distância: 1 até `fullRange`, cai até `minScale` no fim do alcance. */
+export function shotFalloff(def: MoveDef, d: number): number {
+  if (!def.shot || def.hitbox.shape !== 'capsule') return 1;
+  const { fullRange, minScale } = def.shot;
+  const t = Math.max(0, Math.min(1, (d - fullRange) / Math.max(1e-6, def.hitbox.to - fullRange)));
+  return 1 - (1 - minScale) * t;
+}
+
 function wearWeapon(s: SimState, f: Fighter, data: CombatData, events: SimEvent[]): void {
-  if (f.durability === null) return;
+  // Arma de fogo gasta bala no disparo, não no contato.
+  if (f.durability === null || weaponOf(f, data).municao) return;
   f.durability--;
   if (f.durability > 0) return;
+  breakWeapon(s, f, data, events);
+}
+
+/** A arma da mão acabou (quebrou ou ficou sem bala): vira `quebraEm` ou os punhos. */
+function breakWeapon(s: SimState, f: Fighter, data: CombatData, events: SimEvent[]): void {
   const old = weaponOf(f, data);
   const into = old.quebraEm ?? 'punhos';
   // Se a mochila já tem a arma em que esta vira (os punhos, sempre), tira de lá para não duplicar.
   const kept = f.bag.find((w) => w.id === into);
   f.bag = f.bag.filter((w) => w.id !== into);
   f.weapon = into;
-  f.durability = kept ? kept.durability : (data.weapons[into]?.durabilidade ?? null);
+  f.durability = kept ? kept.durability : freshDurability(data.weapons[into]);
   events.push({ type: 'weaponBreak', tick: s.tick, fighter: f.id, weapon: old.id, into });
 }
 

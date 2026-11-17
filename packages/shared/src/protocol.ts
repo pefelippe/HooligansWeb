@@ -18,6 +18,8 @@ export interface MatchTicketClaims {
   serverUrl: string;
   /** Visual escolhido no perfil (o game server revalida). */
   visual?: CharacterVisual;
+  /** Nível da conta (destrava itens da loja). */
+  level?: number;
 }
 
 // ---------------------------------------------------------------- salas (lobby)
@@ -33,6 +35,7 @@ export interface RoomTicketClaims {
   team: TeamSide;
   nick: string;
   visual?: CharacterVisual;
+  level?: number;
 }
 
 export interface RoomPlayer {
@@ -102,6 +105,8 @@ export interface FighterSnapshot {
   move: string | null;
   charge: number;
   weapon: string;
+  /** Nível da conta (a loja trava itens por nível). */
+  level: number;
   durability: number | null;
   /** Ids das armas na mochila, na ordem da roda. */
   bag: string[];
@@ -188,6 +193,7 @@ export function toSnapshot(s: SimState, f: Fighter, data = DEFAULT_COMBAT_DATA):
     move: f.move?.def.id ?? null,
     charge: f.state === 'charging' ? f.stateTick : round(f.move?.charge ?? 0),
     weapon: f.weapon,
+    level: f.level,
     durability: f.durability,
     bag: f.bag.map((w) => w.id),
     invulnerable: f.state !== 'ko' && f.state !== 'dead' && isInvulnerable(f, s.tick, c),
