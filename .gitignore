@@ -7,3 +7,9 @@ coverage
 
 .vercel
 .env*
+
+# Pacotes de arte originais (grandes); o jogo usa só o que vai para apps/web/public/models
+assets-src/
+
+# Worktrees dos agentes do Claude Code
+.claude/worktrees/
