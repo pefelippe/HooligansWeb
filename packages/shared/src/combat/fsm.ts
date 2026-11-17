@@ -150,6 +150,12 @@ export interface Fighter {
   bombas: number;
   gases: number;
   throwReadyTick: number;
+  /** Tick a partir do qual o C (passo/rolamento) funciona de novo. */
+  dodgeReadyTick: number;
+  /** Mirando com arma de fogo (botão AIM segurado). */
+  aiming: boolean;
+  /** Tick a partir do qual pode pular de novo (conta da decolagem). */
+  jumpReadyTick: number;
   /** Arremessável na mão (roda do mouse escolhe; clique arremessa). null = arma. */
   inHand: 'bomba' | 'gas' | null;
   /** Próximo tick em que a arma com cooldown (pistola) pode atacar de novo. */

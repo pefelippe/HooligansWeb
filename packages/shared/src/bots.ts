@@ -5,7 +5,7 @@ import { BANDAGEM, BOMBA, canBuy, CURATIVO, GAS } from './combat/shop';
 import { canRevive, downedAllyInRange, inSede } from './combat/sim';
 import type { TeamSide, Vec2 } from './combat/types';
 import { DEFAULT_COMBAT_DATA } from './combat/weapons';
-import { findTraverse, inRect, LANES, MAP_HALF_W } from './map';
+import { findTraverse, inRect } from './map';
 import { type ControlPointState, type MatchState, matchBuy } from './match';
 import { nextRandom } from './rng';
 
@@ -37,7 +37,7 @@ export interface BotBrain {
   seenAttack: string;
   heldBlock: boolean;
   role: BotRole;
-  /** Rota do atacante (z da rua usada para atravessar o estacionamento). */
+  /** Índice do corredor (map.lanes) da rota do atacante. */
   lane: number;
   /** Ponto de controle preferido (0 = A, 1 = B, 2 = C): espalha o time pelos três. */
   pointPref: number;
@@ -70,7 +70,7 @@ export function createBrain(id: string, seed: number): BotBrain {
     seenAttack: '',
     // Papel pela vaga (seed % 10): 5 atacantes, 2 defensores, 3 caçadores, igual nos dois times.
     role: seed % 10 < 5 ? 'atacante' : seed % 10 < 7 ? 'defensor' : 'cacador',
-    lane: LANES[seed % 3] ?? 0,
+    lane: seed % 3,
     pointPref: Math.floor(seed / 3) % 3,
   };
 }
@@ -114,17 +114,8 @@ function decide(m: MatchState, brain: BotBrain): PlayerInput {
   const mySede = s.sedes.find((sd) => sd.team === self.team)?.pos ?? { x: 0, z: 0 };
   const inMySede = inSede(s, self)?.team === self.team;
 
-  // Caído: rasteja na direção do aliado mais próximo.
-  if (self.state === 'downed') {
-    const ally = s.fighters
-      .filter((f) => f.team === self.team && f !== self && f.state !== 'downed' && isAlive(f))
-      .sort((a, b) => dist(a.pos, self.pos) - dist(b.pos, self.pos))[0];
-    if (!ally) return idle;
-    const dx = ally.pos.x - self.pos.x;
-    const dz = ally.pos.z - self.pos.z;
-    const len = Math.hypot(dx, dz) || 1;
-    return { moveX: dx / len, moveZ: dz / len, aim: self.facing, buttons: 0 };
-  }
+  // Caído: não se mexe, espera um aliado.
+  if (self.state === 'downed') return idle;
 
   // Compra na sede: arma quando está de punhos, depois um curativo se sobrar dinheiro.
   if (inMySede && self.weapon === 'punhos') {
@@ -232,10 +223,10 @@ function decide(m: MatchState, brain: BotBrain): PlayerInput {
     // Carregando: volta para casa sem parar (só briga se alguém encostar).
     if (self.carrying) {
       // Volta pela rua mais próxima (sem cruzar fileiras de carros) até perto do galpão, e entra.
-      const homeX = (myTeam === 0 ? -1 : 1) * (MAP_HALF_W - 30);
+      const homeX = (myTeam === 0 ? -1 : 1) * (m.map.halfW - 30);
       const towardHome = myTeam === 0 ? -1 : 1;
       if (towardHome * self.pos.x < towardHome * homeX - 1) {
-        const lane = LANES.reduce<number>((b, l) => (Math.abs(l - self.pos.z) < Math.abs(b - self.pos.z) ? l : b), 0);
+        const lane = m.map.lanes.reduce<number>((b, l) => (Math.abs(l - self.pos.z) < Math.abs(b - self.pos.z) ? l : b), 0);
         if (Math.abs(self.pos.z - lane) > 2.5) return go({ x: self.pos.x + towardHome * 2, z: lane });
         return go({ x: homeX, z: lane });
       }
@@ -257,9 +248,9 @@ function decide(m: MatchState, brain: BotBrain): PlayerInput {
         return go(enemyFlag.pos);
       } else if (enemyFlag.state === 'home' && brain.role === 'atacante' && !adjacentEnemy && brain.mode !== 'recuar') {
         // Segue uma rota (avenida central ou uma das ruas laterais) até a porta do galpão rival.
-        const lane = brain.lane;
+        const lane = m.map.lanes[brain.lane] ?? 0;
         const sideX = myTeam === 0 ? 1 : -1;
-        const approachX = sideX * (MAP_HALF_W - 30);
+        const approachX = sideX * (m.map.halfW - 30);
         const progress = sideX * self.pos.x;
         if (progress < sideX * approachX - 1) {
           // Ainda no caminho: entra na rota e anda por ela.

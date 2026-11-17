@@ -36,13 +36,13 @@ const REASONS: Record<string, string> = {
 const CONTROLS: [string, string][] = [
   ['WASD', 'Mover'],
   ['Shift', 'Correr'],
-  ['Espaço', 'Pular'],
+  ['Espaço', 'Pular · perto de grade/carro: pular por cima, subir · correndo: capô'],
   ['Mouse esq.', 'Leve · combo'],
   ['Mouse dir.', 'Pesado · segure'],
   ['F', 'Bloquear · parry'],
   ['C', 'Passo · rolar correndo'],
-  ['E', 'Empurrão · cabeçada'],
-  ['Q', 'Chute · voadora no ar'],
+  ['E', 'Empurrão (contra o carro esmaga) · cabeçada'],
+  ['Q', 'Chute · correndo: carrinho · no ar: voadora · caindo do alto: pisão'],
   ['R', 'Especial'],
   ['G', 'Grito da torcida'],
   ['4', 'Curativo'],
@@ -57,6 +57,14 @@ const CONTROLS: [string, string][] = [
   ['V (segure)', 'Olhar para trás'],
   ['M · N', 'Som liga/desliga · música'],
   ['H', 'Esconder comandos'],
+];
+const CONTROL_LABEL = new Map(CONTROLS);
+/** Atalhos do menu do Esc, agrupados (chaves de CONTROLS). */
+const CONTROL_GROUPS: [string, string[]][] = [
+  ['Movimento', ['WASD', 'Shift', 'Espaço', 'C', 'V (segure)']],
+  ['Combate', ['Mouse esq.', 'Mouse dir.', 'F', 'E', 'Q', 'R', 'G']],
+  ['Itens', ['4', '5', 'Roda', 'Z (segure)', 'J']],
+  ['Time e câmera', ['X', 'Tab', 'Puxão do mouse', 'M · N']],
 ];
 
 /** Atributos de 0 a 1 para os cards da loja. */
@@ -252,7 +260,7 @@ export function Game({ serverUrl, ticket, onExit, onReconnect }: Props) {
           : me.money < it.preco
             ? 'Saldo insuficiente'
             : it.preco === 0
-              ? 'Pegar · grátis'
+              ? 'Pegar'
               : `Comprar · $${it.preco}`;
     return { owned, locked, disabled: owned || locked || !canShop || me.money < it.preco, label };
   };
@@ -311,7 +319,7 @@ export function Game({ serverUrl, ticket, onExit, onReconnect }: Props) {
             );
           })()}
           {hud.match.points.length > 0 && (
-            <div className="h-points" title="Ponto dominado: +1 no placar a cada 10 s">
+            <div className="h-points" title="Ponto dominado: +1 no placar a cada 10 s. Dominar os 3 ao mesmo tempo vence a partida.">
               {hud.match.points.map((p) => {
                 const rel = (t: 0 | 1 | null) => (t === null ? 'neutral' : t === team ? 'ally' : 'enemy');
                 const filling = p.capTeam !== null && !(p.owner === p.capTeam && p.progress >= 1);
@@ -361,7 +369,7 @@ export function Game({ serverUrl, ticket, onExit, onReconnect }: Props) {
       </div>
 
       {/* Mira e indicadores */}
-      {hud?.pointerLocked && <div className="crosshair" />}
+      {hud?.pointerLocked && <div className={`crosshair${hud.aiming ? ' aim' : ''}`} />}
       {hud?.lockTargetNick && <div className="lock-tag">Alvo · {hud.lockTargetNick}</div>}
       {hitDirs.map((h) => (
         <div key={h.id} className="hitdir" style={{ transform: `translate(-50%, -50%) rotate(${-h.angle}rad) scale(${0.8 + h.power * 0.5})` }}>
@@ -381,6 +389,7 @@ export function Game({ serverUrl, ticket, onExit, onReconnect }: Props) {
             {me.slowed && <span className="chip red">Lento</span>}
             {me.armored && me.fury === 0 && me.state !== 'attack' && me.state !== 'charging' && me.state !== 'shout' && <span className="chip gold">Fúria</span>}
           </div>
+          <div className={`h-card ${lowHp ? 'low' : ''}`}>
           <div className="h-id">
             <Crest torcida={myTorcida} size={18} />
             <b>{nick(me.id)}</b>
@@ -409,23 +418,54 @@ export function Game({ serverUrl, ticket, onExit, onReconnect }: Props) {
               <Meter kind="fury" value={me.fury} max={C.fury.max} />
             </div>
           )}
+          </div>
         </div>
       )}
 
-      {/* Itens: saldo, arma, curativo */}
+      {/* Itens: curativo, bandagem, colete, arma */}
       {me && (
         <div className="h-items">
-          <div className="h-cash">
-            <small>Saldo</small>
-            <b>${me.money}</b>
+          <div className="h-row-items">
+          <div className={`h-slot use ${me.curativos > 0 ? '' : 'off'}`}>
+            <div className="h-slot-top">
+              <Key>4</Key>
+              <span>×{me.curativos}</span>
+            </div>
+            <ItemIcon id="curativo" size={24} />
+            <b>Curativo</b>
           </div>
-          <div className="h-slot weapon">
+          <div className={`h-slot use ${me.bandagens > 0 ? '' : 'off'}`}>
+            <div className="h-slot-top">
+              <Key>5</Key>
+              <span>×{me.bandagens}</span>
+            </div>
+            <ItemIcon id="bandagem" size={24} />
+            <b>Bandagem</b>
+          </div>
+          {me.colete > 0 && (
+            <div className="h-slot use armor">
+              <div className="h-slot-top">
+                <span>{me.colete}</span>
+              </div>
+              <ItemIcon id="colete" size={24} />
+              <b>Colete</b>
+            </div>
+          )}
+          <div className={`h-slot weapon ${me.inHand ? 'throw' : ''}`}>
             <span className="h-slot-ico">
-              <ItemIcon id={me.inHand ?? me.weapon} size={20} />
+              <ItemIcon id={me.inHand ?? me.weapon} size={40} />
             </span>
-            <small>Arma</small>
+            <small>{me.inHand ? 'Na mão' : 'Arma'}</small>
             <b>{me.inHand ? `${me.inHand === 'bomba' ? 'Bomba' : 'Gás'} ×${me.inHand === 'bomba' ? me.bombas : me.gases}` : (weapon?.nome ?? me.weapon)}</b>
-            {me.inHand ? <em>Clique arremessa</em> : me.durability !== null && weapon?.durabilidade ? <Meter kind="dur" value={me.durability} max={weapon.durabilidade} /> : <em>Não quebra</em>}
+            {me.inHand ? (
+              <em>Clique arremessa</em>
+            ) : me.durability !== null && weapon?.durabilidade ? (
+              <span className="h-dur" style={{ ['--n' as string]: weapon.durabilidade }}>
+                <Meter kind="dur" value={me.durability} max={weapon.durabilidade} />
+              </span>
+            ) : (
+              <em>Não quebra</em>
+            )}
             {(me.bag.length > 0 || me.bombas > 0 || me.gases > 0) && (
               <span className="h-bag" title="Roda do mouse troca de arma">
                 {[...me.bag, ...(me.bombas > 0 ? [`bomba ×${me.bombas}`] : []), ...(me.gases > 0 ? [`gas ×${me.gases}`] : [])].map((label) => (
@@ -435,26 +475,7 @@ export function Game({ serverUrl, ticket, onExit, onReconnect }: Props) {
               </span>
             )}
           </div>
-          <div className={`h-slot use ${me.curativos > 0 ? '' : 'off'}`}>
-            <Key>4</Key>
-            <ItemIcon id="curativo" size={16} />
-            <b>Curativo</b>
-            <span>×{me.curativos}</span>
           </div>
-          <div className={`h-slot use ${me.bandagens > 0 ? '' : 'off'}`}>
-            <Key>5</Key>
-            <ItemIcon id="bandagem" size={16} />
-            <b>Bandagem</b>
-            <span>×{me.bandagens}</span>
-          </div>
-          {me.colete > 0 && (
-            <div className="h-slot use">
-              <ItemIcon id="colete" size={16} />
-              <b>Colete</b>
-              <span>{me.colete}</span>
-            </div>
-          )}
-
         </div>
       )}
 
@@ -500,7 +521,7 @@ export function Game({ serverUrl, ticket, onExit, onReconnect }: Props) {
       {me?.state === 'downed' && !result && (
         <div className="status-banner downed">
           <h2>Caído</h2>
-          <p>Rasteje até um aliado. Ele te levanta segurando X.</p>
+          <p>Você não consegue se mexer. Um aliado te levanta segurando X.</p>
           <Meter kind="bleedout" value={1 - me.channel} max={1} />
         </div>
       )}
@@ -513,33 +534,58 @@ export function Game({ serverUrl, ticket, onExit, onReconnect }: Props) {
           </p>
         </div>
       )}
-      {wheel && me && (
-        <div className="item-wheel">
-          {WHEEL.map((it, i) => {
-            const a = (i / WHEEL.length) * 2 * Math.PI;
-            const have = it.id === me.weapon || me.bag.includes(it.id) || (it.id === BOMBA.id && me.bombas > 0) || (it.id === GAS.id && me.gases > 0) || (it.id === COLETE.id && me.colete > 0);
-            const cur = (me.inHand ?? me.weapon) === it.id;
-            return (
-              <div key={it.id} className={`iw-slot${i === wheelSlice(wheel) ? ' on' : ''}${have ? ' have' : ''}${cur ? ' cur' : ''}`} style={{ left: `calc(50% + ${Math.sin(a) * 150}px)`, top: `calc(50% - ${Math.cos(a) * 150}px)` }}>
-                <ItemIcon id={it.id} size={26} />
-              </div>
-            );
-          })}
-          <div className="iw-center">
-            {(() => {
-              const it = WHEEL[wheelSlice(wheel)];
-              if (!it) return <span>Mova o mouse e solte o Z</span>;
-              const have = it.id === me.weapon || me.bag.includes(it.id) || (it.id === BOMBA.id && me.bombas > 0) || (it.id === GAS.id && me.gases > 0);
+      {wheel && me && (() => {
+        const sel = wheelSlice(wheel);
+        const step = 360 / WHEEL.length;
+        const held = me.inHand ?? me.weapon;
+        // Já tem: quantidade (arremessáveis, colete), "Na mão" ou "Mochila". Não tem: nada (soltar o Z pega).
+        const tag = (it: (typeof WHEEL)[number]): string | null =>
+          it.id === held
+            ? 'Na mão'
+            : it.id === BOMBA.id && me.bombas > 0
+              ? `×${me.bombas}`
+              : it.id === GAS.id && me.gases > 0
+                ? `×${me.gases}`
+                : it.id === COLETE.id && me.colete > 0
+                  ? String(me.colete)
+                  : it.id === me.weapon || me.bag.includes(it.id)
+                    ? 'Mochila'
+                    : null;
+        const it = WHEEL[sel];
+        const itTag = it ? tag(it) : null;
+        return (
+          <div className="item-wheel">
+            <div className="iw-ring" />
+            {sel >= 0 && <div className="iw-ring sel" style={{ background: `conic-gradient(from ${sel * step - step / 2}deg, var(--accent) 0 ${step}deg, transparent ${step}deg)` }} />}
+            {WHEEL.map((w, i) => {
+              const a = (i / WHEEL.length) * 2 * Math.PI;
+              const t = tag(w);
               return (
-                <>
-                  <b>{it.nome}</b>
-                  <span>{have ? 'Equipar' : it.id === COLETE.id ? 'Vestir' : 'Pegar'}</span>
-                </>
+                <div key={w.id} className={`iw-slot${i === sel ? ' on' : ''}${t ? ' have' : ''}`} style={{ left: `calc(50% + ${Math.sin(a) * 200}px)`, top: `calc(50% - ${Math.cos(a) * 200}px)` }}>
+                  <ItemIcon id={w.id} size={28} />
+                  {t && <small>{t}</small>}
+                </div>
               );
-            })()}
+            })}
+            <div className="iw-center">
+              {it ? (
+                <>
+                  <small>{itTag === 'Na mão' ? 'Na mão' : itTag ? 'Você tem' : 'Pegar'}</small>
+                  <b>{it.nome}</b>
+                  <span>{itTag === 'Na mão' ? 'Já está equipado' : itTag ? 'Solte o Z para equipar' : it.id === COLETE.id ? 'Solte o Z para vestir' : 'Solte o Z para pegar'}</span>
+                </>
+              ) : (
+                <span>Mire com o mouse</span>
+              )}
+            </div>
+            <div className="iw-foot">
+              <span>
+                Mire com o mouse · solte <Key>Z</Key>
+              </span>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
       {hud && !hud.pointerLocked && !shopOpen && !menuOpen && !result && <div className="lock-hint">Clique na tela para controlar a câmera</div>}
 
       {/* Comandos: escondidos; H mostra */}
@@ -561,56 +607,95 @@ export function Game({ serverUrl, ticket, onExit, onReconnect }: Props) {
 
       {/* Menu do Esc: som, música, sensibilidade, atalhos e sair. A partida continua rolando. */}
       {menuOpen && !result && (
-        <div className="overlay">
-          <div className="h-menu" role="dialog" aria-labelledby="h-menu-title">
+        <div className="overlay h-pause">
+          <div className="h-menu" role="dialog" aria-labelledby="h-menu-title" style={{ ['--tc' as string]: teamGlow(myTorcida) }}>
             <header>
+              <small className="h-kicker">Pausa</small>
               <h2 id="h-menu-title">Menu</h2>
-              <small>A partida continua rolando</small>
+              <p>
+                <i /> A partida continua rolando
+              </p>
             </header>
-            <button className="primary" onClick={closeMenu}>
-              Voltar ao jogo
-            </button>
-            <div className="h-menu-row">
-              <span>Som</span>
-              <button className="secondary" onClick={() => engineRef.current?.toggleMute()}>
-                {hud?.muted ? 'Desligado' : 'Ligado'}
-              </button>
-            </div>
-            <div className="h-menu-row">
-              <span>Música (batuque)</span>
-              <button className="secondary" onClick={() => engineRef.current?.switchMusic()}>
-                {hud?.musicOn ? 'Ligada' : 'Desligada'}
-              </button>
-            </div>
-            <label className="h-menu-row">
-              <span>Sensibilidade do mouse · {sens.toFixed(1)}x</span>
-              <input
-                type="range"
-                min={0.3}
-                max={2.5}
-                step={0.1}
-                value={sens}
-                onChange={(e) => {
-                  const v = Number(e.target.value);
-                  setSens(v);
-                  if (engineRef.current) engineRef.current.sensitivity = v;
-                }}
-              />
-            </label>
-            <details className="h-menu-keys">
-              <summary>Atalhos</summary>
-              <div className="controls static">
-                {CONTROLS.map(([k, label]) => (
-                  <div key={k}>
-                    <Key wide={k.length > 2}>{k}</Key>
-                    <span>{label}</span>
-                  </div>
-                ))}
+            {hud?.match && (
+              <div className="h-menu-score">
+                <div className="mine">
+                  <span>{myTorcida.nome}</span>
+                  <b>{hud.match.score[team]}</b>
+                </div>
+                <b className="clock">{fmtClock(secs)}</b>
+                <div className="rival" style={{ ['--rc' as string]: teamGlow(TORCIDAS[team === 0 ? 1 : 0]) }}>
+                  <b>{hud.match.score[team === 0 ? 1 : 0]}</b>
+                  <span>{TORCIDAS[team === 0 ? 1 : 0].nome}</span>
+                </div>
               </div>
-            </details>
-            <button className="secondary h-menu-exit" onClick={onExit}>
+            )}
+            <button className="h-menu-back" onClick={closeMenu}>
+              Voltar ao jogo <Key>Esc</Key>
+            </button>
+            <section>
+              <small className="h-sec">Áudio</small>
+              <div className="h-menu-row">
+                <span>
+                  <Key>M</Key> Som
+                </span>
+                <button className={`h-switch${hud?.muted ? '' : ' on'}`} aria-pressed={!hud?.muted} aria-label="Som" onClick={() => engineRef.current?.toggleMute()}>
+                  <i />
+                </button>
+              </div>
+              <div className="h-menu-row">
+                <span>
+                  <Key>N</Key> Música (batuque)
+                </span>
+                <button className={`h-switch${hud?.musicOn ? ' on' : ''}`} aria-pressed={!!hud?.musicOn} aria-label="Música" onClick={() => engineRef.current?.switchMusic()}>
+                  <i />
+                </button>
+              </div>
+            </section>
+            <section>
+              <small className="h-sec">Controle</small>
+              <label className="h-menu-row col">
+                <span>
+                  Sensibilidade do mouse <b>{sens.toFixed(1)}x</b>
+                </span>
+                <input
+                  type="range"
+                  min={0.3}
+                  max={2.5}
+                  step={0.1}
+                  value={sens}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    setSens(v);
+                    if (engineRef.current) engineRef.current.sensitivity = v;
+                  }}
+                />
+              </label>
+            </section>
+            <button className="h-menu-exit" onClick={onExit}>
               Sair da partida
             </button>
+          </div>
+          <div className="h-menu-keys">
+            <h3>
+              Atalhos <small>H mostra a lista durante o jogo</small>
+            </h3>
+            <div className="h-menu-groups">
+              {CONTROL_GROUPS.map(([title, keys]) => (
+                <div key={title}>
+                  <small className="h-sec">{title}</small>
+                  <dl>
+                    {keys.map((k) => (
+                      <div key={k}>
+                        <dt>
+                          <Key wide={k.length > 2}>{k}</Key>
+                        </dt>
+                        <dd>{CONTROL_LABEL.get(k)}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       )}
@@ -647,10 +732,6 @@ export function Game({ serverUrl, ticket, onExit, onReconnect }: Props) {
                     {me.bombas} · {me.gases}
                   </dd>
                 </div>
-                <div className="cash">
-                  <dt>Saldo</dt>
-                  <dd>${me.money}</dd>
-                </div>
               </dl>
               <button className="h-close" onClick={closeShop}>
                 Fechar <Key>J</Key>
@@ -676,7 +757,6 @@ export function Game({ serverUrl, ticket, onExit, onReconnect }: Props) {
                         </span>
                         <b>{it.nome}</b>
                         <small>{st.owned ? (it.tipo === 'arma' ? (me.weapon === it.id ? 'Equipada' : 'Na mochila') : 'No limite') : it.tipo === 'arma' ? DEFAULT_COMBAT_DATA.weapons[it.id]?.tipo : it.id === BANDAGEM.id ? 'Cura rápida' : it.id === BOMBA.id || it.id === GAS.id ? 'Arremesso' : it.id === COLETE.id ? 'Proteção' : 'Consumível'}</small>
-                        <span className={me.money >= it.preco && !st.locked ? 'price' : 'price short'}>{st.locked ? `Nv ${it.nivelMin}` : it.preco === 0 ? 'Grátis' : `$${it.preco}`}</span>
                       </button>
                     </li>
                   );
@@ -744,7 +824,7 @@ export function Game({ serverUrl, ticket, onExit, onReconnect }: Props) {
               rows={[0, 1].map((t) =>
                 hud.fighters
                   .filter((f) => f.team === t)
-                  .map((f) => ({ id: f.id, nick: nick(f.id), bot: !!hud.roster[f.id]?.bot, kos: f.kos, deaths: f.deaths, assists: f.assists, money: t === team ? f.money : null, state: f.state, weapon: f.weapon })),
+                  .map((f) => ({ id: f.id, nick: nick(f.id), bot: !!hud.roster[f.id]?.bot, kos: f.kos, deaths: f.deaths, assists: f.assists, money: null, state: f.state, weapon: f.weapon })),
               )}
               score={hud.match?.score ?? [0, 0]}
               you={hud.you}

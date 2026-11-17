@@ -24,6 +24,8 @@ export const Buttons = {
   /** Roda do mouse: próximo / anterior da roda (armas e arremessáveis). */
   WEAPON_NEXT: 1 << 17,
   WEAPON_PREV: 1 << 18,
+  /** Botão direito com arma de fogo: mira (anda devagar, não corre; pular rola para o lado). */
+  AIM: 1 << 19,
 } as const;
 
 export interface PlayerInput {
@@ -48,5 +50,5 @@ export function sanitizeInput(input: PlayerInput, fallbackAim: number): PlayerIn
     moveX /= len;
     moveZ /= len;
   }
-  return { moveX, moveZ, aim: fin(input.aim, fallbackAim), buttons: (input.buttons | 0) & 0x7ffff };
+  return { moveX, moveZ, aim: fin(input.aim, fallbackAim), buttons: (input.buttons | 0) & 0xfffff };
 }

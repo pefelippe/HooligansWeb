@@ -1,4 +1,4 @@
-import type { LobbyServerMessage, MatchTicketClaims, TeamSide } from '@torcidas/shared';
+import type { LobbyServerMessage, MatchSize, MatchTicketClaims, TeamSide } from '@torcidas/shared';
 import { describe, expect, it } from 'vitest';
 import { type RoomDeps, RoomManager, type RoomMatch } from '../src/rooms';
 
@@ -17,12 +17,13 @@ class FakeMatch implements RoomMatch {
   }
 }
 
-function setup() {
+function setup(tamanho: MatchSize = 10) {
   const matches: FakeMatch[] = [];
   const tickets: MatchTicketClaims[] = [];
   const deps: RoomDeps = {
     serverUrl: 'ws://test',
-    createMatch: (_roomId, bots, onEnd) => {
+    createMatch: (_roomId, bots, size, onEnd) => {
+      expect(size).toBe(tamanho);
       const m = new FakeMatch(bots, onEnd);
       matches.push(m);
       return m;
@@ -33,7 +34,7 @@ function setup() {
     },
   };
   const rooms = new RoomManager(deps);
-  const room = rooms.create('Sala teste', true, 'lider');
+  const room = rooms.create('Sala teste', true, 'lider', tamanho);
   const inbox = new Map<string, LobbyServerMessage[]>();
   const closed = new Map<string, number>();
   const member = (userId: string, team: TeamSide = 0) => {
@@ -76,27 +77,39 @@ describe('salas', () => {
     expect(rooms.byCodeOf(room.code.toLowerCase())).toBe(room);
   });
 
-  it('bots: no máximo 25 por time contando os humanos', () => {
-    const { room, member } = setup();
+  it('bots: completam o tamanho da sala e nunca passam dele contando os humanos', () => {
+    const { room, member } = setup(20);
+    expect(room.bots).toEqual([20, 20]);
     room.join(member('lider'));
     room.join(member('b', 0));
+    expect(room.bots[0]).toBe(18);
     expect(room.setBots('lider', 0, 40)).toBeNull();
-    expect(room.bots[0]).toBe(23);
+    expect(room.bots[0]).toBe(18);
     expect(room.setBots('lider', 1, -5)).toBeNull();
     expect(room.bots[1]).toBe(0);
     // Mais um humano no time cheio: um bot sai para ele.
     room.join(member('c', 0));
-    expect(room.bots[0]).toBe(22);
-    expect(room.humans(0) + room.bots[0]).toBe(25);
+    expect(room.bots[0]).toBe(17);
+    expect(room.humans(0) + room.bots[0]).toBe(20);
   });
 
-  it('25 humanos por time e 50 no total', () => {
-    const { room, member } = setup();
-    for (let i = 0; i < 25; i++) expect(room.join(member(`a${i}`, 0))).toBeNull();
+  it('20×20: 20 humanos por time e 40 no total', () => {
+    const { room, member } = setup(20);
+    for (let i = 0; i < 20; i++) expect(room.join(member(`a${i}`, 0))).toBeNull();
     expect(room.join(member('extra', 0))).toBe('time_cheio');
-    for (let i = 0; i < 25; i++) expect(room.join(member(`b${i}`, 1))).toBeNull();
-    expect(room.size).toBe(50);
+    for (let i = 0; i < 20; i++) expect(room.join(member(`b${i}`, 1))).toBeNull();
+    expect(room.size).toBe(40);
     expect(room.join(member('extra2', 1))).toBe('time_cheio');
+  });
+
+  it('1×1: o líder contra um bot; o segundo humano tira o bot do outro time', () => {
+    const { room, member } = setup(1);
+    room.join(member('lider'));
+    expect(room.bots).toEqual([0, 1]);
+    expect(room.join(member('ana', 0))).toBe('time_cheio');
+    expect(room.join(member('bia', 1))).toBeNull();
+    expect(room.bots).toEqual([0, 0]);
+    expect(room.info().tamanho).toBe(1);
   });
 
   it('líder sai: a liderança passa para o mais antigo', () => {
@@ -118,7 +131,7 @@ describe('salas', () => {
     expect(room.start('lider')).toBeNull();
     expect(room.fase).toBe('playing');
     expect(room.start('lider')).toBe('ja_em_partida');
-    expect(matches[0]?.initial).toEqual([4, 5]);
+    expect(matches[0]?.initial).toEqual([4, 9]);
     await flush();
     expect(tickets.map((t) => t.userId).sort()).toEqual(['ana', 'lider']);
     expect(tickets[0]?.matchId).toBe(matches[0]?.id);
@@ -140,7 +153,7 @@ describe('salas', () => {
 
   it('lista só as públicas com gente; sala vazia some depois do prazo', () => {
     const { rooms, room, member } = setup();
-    const privada = rooms.create('Privada', false, 'x');
+    const privada = rooms.create('Privada', false, 'x', 5);
     privada.join(member('x'));
     expect(rooms.listPublic()).toEqual([]);
     room.join(member('lider'));

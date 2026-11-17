@@ -24,9 +24,11 @@ export interface AnimPick {
   speed: number;
   /** Perna por cima do clipe: chute e voadora não têm clipe próprio. */
   kick?: number;
+  /** Pulo: joelho direito para cima, esquerdo dobrado e antebraços levemente flexionados (0..1). */
+  tuck?: number;
 }
 
-type Snap = Pick<FighterSnapshot, 'state' | 'stateTick' | 'stateDuration' | 'airborne' | 'running' | 'dodgeKind' | 'traverse'>;
+type Snap = Pick<FighterSnapshot, 'state' | 'stateTick' | 'stateDuration' | 'airborne' | 'running' | 'dodgeKind' | 'traverse'> & Partial<Pick<FighterSnapshot, 'aiming'>>;
 
 export const TICK_S = 1 / 60;
 
@@ -106,7 +108,8 @@ export function pickAnim(f: Snap, def: MoveDef | undefined, speed: number, clips
       return at('Sword_Block', 0.45);
     case 'dodge':
       // A esquiva entra sem duração no estado: o tempo vem das constantes (senão o clipe pula pro fim).
-      return f.dodgeKind === 'step' ? { clip: 'Crouch_Idle_Loop', speed: 1 } : at('Roll', prog(t, DODGE[f.dodgeKind].duration));
+      // Passo: desliza em pé (o Crouch_Idle_Loop parecia agachar).
+      return f.dodgeKind === 'step' ? { clip: 'Idle_Loop', speed: 1 } : at('Roll', prog(t, DODGE[f.dodgeKind].duration));
     case 'traverse': {
       const k = prog(t, f.stateDuration);
       if (f.traverse === 'subir') return at('ClimbUp_1m', k);
@@ -141,7 +144,10 @@ export function pickAnim(f: Snap, def: MoveDef | undefined, speed: number, clips
       break;
   }
   // No ar em relação ao chão debaixo do pé: em cima do carro é chão.
-  if (f.airborne) return { clip: 'Jump_Loop', speed: 1 };
+  // No ar: em pé com o joelho para cima (os clipes de pulo agacham ou abrem os braços).
+  if (f.airborne) return { clip: 'Idle_Loop', speed: 1, tuck: 1 };
+  // Mirando parado: braço estendido (quadro do disparo). Andando mirando, as pernas seguem a locomoção.
+  if (f.aiming && speed < 0.3) return { clip: 'Pistol_Shoot', time: clips('Pistol_Shoot').impact, speed: 1 };
   // Locomoção: velocidade do clipe acompanha a do boneco para o pé não patinar.
   if (speed < 0.3) return { clip: 'Idle_Loop', speed: 1 };
   if (f.running) return { clip: 'Sprint_Loop', speed: Math.max(0.6, speed / 6.5) };

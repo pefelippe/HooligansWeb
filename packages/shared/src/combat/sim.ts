@@ -195,6 +195,9 @@ export function createFighter(nf: NewFighter, data: CombatData = DEFAULT_COMBAT_
     bombas: 0,
     gases: 0,
     throwReadyTick: 0,
+    dodgeReadyTick: 0,
+    aiming: false,
+    jumpReadyTick: 0,
     inHand: null,
     shotReadyTick: 0,
     colete: 0,
@@ -334,7 +337,7 @@ function advance(s: SimState, f: Fighter, data: CombatData, events: SimEvent[]):
   const dt = 1 / TICK_RATE;
   switch (f.state) {
     case 'idle':
-      translate(f, f.moveDir, (f.running ? c.runSpeed : c.walkSpeed) * (f.carrying ? c.flag.carrierSpeed : 1) * (s.tick < f.slowUntil ? c.hitSlow.speedMultiplier : 1) * dt);
+      translate(f, f.moveDir, (f.running ? c.runSpeed : f.aiming ? c.aimWalkSpeed : c.walkSpeed) * (f.carrying ? c.flag.carrierSpeed : 1) * (s.tick < f.slowUntil ? c.hitSlow.speedMultiplier : 1) * dt);
       break;
     case 'block':
       translate(f, f.moveDir, c.blockWalkSpeed * dt);
@@ -343,10 +346,8 @@ function advance(s: SimState, f: Fighter, data: CombatData, events: SimEvent[]):
       translate(f, f.moveDir, c.chargeWalkSpeed * dt);
       break;
     case 'healing':
-      translate(f, f.moveDir, c.curativo.walkSpeed * dt);
-      break;
-    case 'downed':
-      translate(f, f.moveDir, c.downed.crawlSpeed * dt);
+      // Dá para aplicar o curativo correndo.
+      translate(f, f.moveDir, (f.running ? c.runSpeed : c.curativo.walkSpeed) * dt);
       break;
     case 'attack': {
       const fwd = dirFromYaw(f.facing);
@@ -523,17 +524,14 @@ function processInput(s: SimState, f: Fighter, input: PlayerInput, data: CombatD
   let pressed = input.buttons & ~f.prevButtons;
   const held = input.buttons;
   f.prevButtons = input.buttons;
-  if (!isAlive(f)) {
+  // Nocauteado ou caído: não anda, não gira, não age (só um aliado levanta o caído).
+  if (!isStanding(f)) {
     f.moveDir = { x: 0, z: 0 };
+    f.running = false;
+    f.aiming = false;
     return;
   }
   f.moveDir = { x: input.moveX, z: input.moveZ };
-  if (f.state === 'downed') {
-    // Caído: só rasteja.
-    f.running = false;
-    if (Math.hypot(input.moveX, input.moveZ) > 0.1) f.facing = Math.atan2(input.moveX, input.moveZ);
-    return;
-  }
 
   // Arremessável na mão: o clique esquerdo arremessa em vez de bater.
   if (f.inHand && pressed & Buttons.LIGHT) pressed = (pressed & ~Buttons.LIGHT) | (f.inHand === 'bomba' ? Buttons.THROW_BOMB : Buttons.THROW_GAS);
@@ -567,7 +565,13 @@ function processInput(s: SimState, f: Fighter, input: PlayerInput, data: CombatD
   }
   const grounded = !isAirborne(f);
   const moving = Math.hypot(input.moveX, input.moveZ) > 0.1;
-  f.running = f.state === 'idle' && moving && !!(held & Buttons.RUN) && f.stamina >= 1 && s.tick >= f.slowUntil;
+  // Mirar: só com arma de fogo na mão (não com arremessável); não corre.
+  f.aiming = !!(held & Buttons.AIM) && !!weaponOf(f, data).municao && !f.inHand;
+  f.running = (f.state === 'idle' || f.state === 'healing') && moving && !!(held & Buttons.RUN) && !f.aiming && f.stamina >= 1 && s.tick >= f.slowUntil;
+  if (f.running && f.state === 'healing') {
+    f.stamina = Math.max(0, f.stamina - c.runStaminaPerTick);
+    f.lastStaminaSpendTick = s.tick;
+  }
 
   switch (f.state) {
     case 'idle':
@@ -753,6 +757,20 @@ function tryUse(s: SimState, f: Fighter, data: CombatData): boolean {
   return false;
 }
 
+/** Rolamento lateral (pular mirando): mesma regra do rolamento do C (fôlego e recarga), sem virar o corpo. */
+function sideRoll(s: SimState, f: Fighter, c: CombatData['constants']): boolean {
+  const d = c.dodge.roll;
+  if (s.tick < f.dodgeReadyTick || !spendStamina(s, f, d.staminaCost)) return false;
+  const right = dirFromYaw(f.facing - Math.PI / 2);
+  const side = f.moveDir.x * right.x + f.moveDir.z * right.z < -0.1 ? -1 : 1;
+  f.dodgeDir = { x: right.x * side, z: right.z * side };
+  f.dodgeKind = 'roll';
+  f.dodgeReadyTick = s.tick + d.cooldownTicks;
+  enterState(f, 'dodge');
+  f.stateTick = 1;
+  return true;
+}
+
 function tryStart(s: SimState, f: Fighter, action: BufferedAction, data: CombatData, events: SimEvent[]): boolean {
   // Esquiva e pulo cancelam a recuperação de qualquer golpe.
   const recoveryDodge = (action === 'dodge' || action === 'jump') && f.state === 'attack' && !!f.move && attackPhase(f.move.def, f.stateTick) === 'recovery';
@@ -786,6 +804,8 @@ function tryStart(s: SimState, f: Fighter, action: BufferedAction, data: CombatD
       // No ar o chute vira voadora (pisão, caindo do alto); correndo, carrinho.
       return startAttack(s, f, plunging ? data.common.pisao : airborne ? data.common.voadora : f.running ? data.common.carrinho : data.common.kick, -1, data);
     case 'jump': {
+      // Mirando no chão: pular vira rolamento para o lado (o do strafe; parado, para a direita).
+      if (f.aiming && !airborne) return sideRoll(s, f, c);
       const coyote = s.tick - f.groundedTick <= c.coyoteTicks && f.vy <= 0;
       if (airborne && !coyote) return false; // fica no buffer: pula ao aterrissar
       const len = Math.hypot(f.moveDir.x, f.moveDir.z);
@@ -797,7 +817,8 @@ function tryStart(s: SimState, f: Fighter, action: BufferedAction, data: CombatD
         enterTraverse(f, plan, c);
         return true;
       }
-      if (!spendStamina(s, f, c.jumpStaminaCost)) return false;
+      if (s.tick < f.jumpReadyTick || !spendStamina(s, f, c.jumpStaminaCost)) return false;
+      f.jumpReadyTick = s.tick + c.jumpCooldownTicks;
       if (f.state !== 'idle') enterState(f, 'idle');
       f.vy = c.jumpVelocity;
       f.groundedTick = NEVER;
@@ -845,8 +866,8 @@ function tryStart(s: SimState, f: Fighter, action: BufferedAction, data: CombatD
       return true;
     }
     case 'dodge': {
-      if (airborne) return false;
-      // Correndo: rolamento longo; senão: passo curto e barato.
+      if (airborne || s.tick < f.dodgeReadyTick) return false;
+      // Correndo: rolamento longo; senão: passo curto e barato. Os dois têm recarga.
       const kind = f.running || f.prevButtons & Buttons.RUN ? 'roll' : 'step';
       const d = c.dodge[kind];
       if (!spendStamina(s, f, d.staminaCost)) return false;
@@ -855,6 +876,7 @@ function tryStart(s: SimState, f: Fighter, action: BufferedAction, data: CombatD
       const back = dirFromYaw(f.facing);
       f.dodgeDir = len > 0.1 ? { x: f.moveDir.x / len, z: f.moveDir.z / len } : { x: -back.x, z: -back.z };
       f.dodgeKind = kind;
+      f.dodgeReadyTick = s.tick + d.cooldownTicks;
       enterState(f, 'dodge');
       f.stateTick = 1;
       return true;

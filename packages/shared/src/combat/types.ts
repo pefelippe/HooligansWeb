@@ -138,6 +138,8 @@ export interface DodgeDef {
   distance: number;
   /** i-frames [início, fim], frames 1-indexados. */
   iframes: readonly [number, number];
+  /** Ticks, a partir do começo da esquiva, até o C funcionar de novo. */
+  cooldownTicks: number;
 }
 
 export interface TraverseConstants {
@@ -174,6 +176,10 @@ export interface CombatConstants {
   jumpVelocity: number;
   gravity: number;
   jumpStaminaCost: number;
+  /** Velocidade andando enquanto mira com arma de fogo. */
+  aimWalkSpeed: number;
+  /** Ticks entre um pulo e o próximo (conta da decolagem). */
+  jumpCooldownTicks: number;
   /** Chute (golpe baixo) não pega quem está no ar acima desta altura. */
   kickMaxTargetHeight: number;
   blockWalkSpeed: number;
@@ -259,7 +265,6 @@ export interface CombatConstants {
   downed: {
     ticks: number;
     hp: number;
-    crawlSpeed: number;
     reviveTicks: number;
     reviveRange: number;
     reviveHp: number;

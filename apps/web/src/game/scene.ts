@@ -1,4 +1,4 @@
-import { GALPAO, type GameMap, nextRandom, STADIUM, TORCIDAS } from '@torcidas/shared';
+import { GALPAO, type GameMap, nextRandom, TORCIDAS } from '@torcidas/shared';
 import * as THREE from 'three';
 import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 
@@ -7,6 +7,7 @@ const LAMP_MAT = new THREE.MeshBasicMaterial({ color: 0xffe9b0 });
 // Monta o entorno do Castelão a partir do mesmo GameMap (seed) que o servidor usa para colisão.
 
 export function buildScene(map: GameMap): { scene: THREE.Scene; sun: THREE.DirectionalLight } {
+  const STADIUM = map.stadium;
   const scene = new THREE.Scene();
   // Noite de jogo: céu escuro com o brilho do estádio no horizonte.
   scene.background = skyTexture();
@@ -75,7 +76,7 @@ export function buildScene(map: GameMap): { scene: THREE.Scene; sun: THREE.Direc
     grass.receiveShadow = true;
     world.add(grass);
   }
-  world.add(castelao());
+  world.add(castelao(STADIUM));
 
   // Sedes: piso do galpão tingido com as cores da torcida e faixa na borda.
   map.sedes.forEach((sd, team) => {
@@ -328,8 +329,7 @@ function bus(hw: number, hd: number, h: number, color: string): THREE.Group {
 
 
 /** Castelão: oval com base de concreto, fachada de brises metálicos, pilares e a cobertura branca em anel. */
-function castelao(): THREE.Group {
-  const S = STADIUM;
+function castelao(S: GameMap['stadium']): THREE.Group {
   const g = new THREE.Group();
   g.position.set(S.x, 0, S.z);
   const oval = (m: THREE.Mesh) => {

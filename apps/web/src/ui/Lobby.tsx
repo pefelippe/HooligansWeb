@@ -1,4 +1,4 @@
-import { type LobbyClientMessage, type LobbyServerMessage, PROTOCOL_VERSION, ROOM, type RoomInfo, type TeamSide, TORCIDAS } from '@torcidas/shared';
+import { type LobbyClientMessage, type LobbyServerMessage, PROTOCOL_VERSION, type RoomInfo, type TeamSide, TORCIDAS } from '@torcidas/shared';
 import { useEffect, useRef, useState } from 'react';
 import { Game } from './Game';
 import { Crest } from './kit';
@@ -103,14 +103,14 @@ export function Lobby({ ticket, serverUrl, onLeave }: Props) {
     const torcida = TORCIDAS[t];
     const players = room.players.filter((p) => p.team === t);
     const bots = room.bots[t];
-    const max = ROOM.maxPerTeam - players.length;
+    const max = room.tamanho - players.length;
     return (
       <section key={t} className={`lobby-team ${t === room.players.find((p) => p.id === you)?.team ? 'mine' : ''}`}>
         <header>
           <Crest torcida={torcida} size={36} />
           <b>{torcida.nome}</b>
           <small>
-            {players.length + bots}/{ROOM.maxPerTeam}
+            {players.length + bots}/{room.tamanho}
           </small>
         </header>
         <ul>
@@ -159,7 +159,7 @@ export function Lobby({ ticket, serverUrl, onLeave }: Props) {
         <div>
           <h2>{room.nome}</h2>
           <p className="muted">
-            {room.players.length} {room.players.length === 1 ? 'pessoa' : 'pessoas'} · {room.players.length + room.bots[0] + room.bots[1]}/{ROOM.maxPlayers} lutadores
+            {room.players.length} {room.players.length === 1 ? 'pessoa' : 'pessoas'} · {room.players.length + room.bots[0] + room.bots[1]}/{room.tamanho * 2} lutadores · {room.tamanho}×{room.tamanho}
           </p>
         </div>
         <div className="lobby-code">

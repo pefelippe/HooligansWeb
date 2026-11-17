@@ -3,7 +3,7 @@ import {
   Buttons,
   DEFAULT_COMBAT_DATA,
   DEFAULT_CONSTANTS,
-  STADIUM,
+  findTraverse,
   dirFromYaw,
   type Fighter,
   type FighterSnapshot,
@@ -27,7 +27,7 @@ import {
 import * as THREE from 'three';
 import { CharacterView } from './character';
 import { fighterAsset, loadFighterModel } from './fighterModel';
-import { CombatFx } from './fx';
+import { CombatFx, type ComicStyle } from './fx';
 import { ThrowFx } from './throwFx';
 import { ControlPoints, POINT_COLORS } from './points';
 import { GameConnection, type Welcome } from './net';
@@ -51,6 +51,8 @@ export interface HudState {
   inEnemySede: boolean;
   respawnIn: number | null;
   pointerLocked: boolean;
+  /** Mirando com arma de fogo (botão direito): a mira da tela fecha. */
+  aiming: boolean;
   lockTargetNick: string | null;
   rtt: number;
   /** Desempenho (só em dev): FPS, tempo de frame, draw calls, triângulos e nível de qualidade. */
@@ -122,6 +124,8 @@ export class GameEngine {
   private latch = 0;
   private tabDownAt = 0;
   private sens = readSens();
+  /** 0..1: transição da câmera para a mira (aproxima e fecha o campo de visão). */
+  private aimT = 0;
   /** Roda de itens aberta: vetor do mouse (a câmera não gira enquanto isso). */
   private wheel: { x: number; y: number } | null = null;
   private scoreboardShown = false;
@@ -173,7 +177,10 @@ export class GameEngine {
         playSound(ok ? 'buy' : 'deny', { volume: 0.7 });
         cb.onBuyResult(ok, item, reason);
       },
-      onMatchEnd: (r) => cb.onMatchEnd(r),
+      onMatchEnd: (r) => {
+        this.fireworks(8);
+        cb.onMatchEnd(r);
+      },
       onSnapshot: (tick, ackSeq, self, fighters) => this.reconcile(tick, ackSeq, self, fighters),
       onClose: (reason) => cb.onClose(reason),
     });
@@ -237,7 +244,7 @@ export class GameEngine {
 
   private onWelcome(w: Welcome): void {
     this.welcome = w;
-    this.map = generateMap(w.seed);
+    this.map = generateMap(w.seed, w.mapSize);
     const { scene, sun } = buildScene(this.map);
     this.scene = scene;
     this.sun = sun;
@@ -344,6 +351,7 @@ export class GameEngine {
           this.sparkFx(e.target, crit ? '#ffb020' : '#ffd27a', crit ? 24 : 14, mine);
           if (!mine) break;
           const heavy = e.knockdown || e.damage >= 15;
+          this.comicFx(e.target, crit ? 'heavy' : heavy ? 'heavy' : 'hit', e.knockdown ? 'BAM!' : heavy ? 'POW!' : e.counter ? 'CRACK!' : ['PÁ!', 'TUM!', 'SOC!'][Math.floor(Math.random() * 3)]!, heavy ? 1.3 : 1);
           this.sfxAt(heavy ? 'heavyHit' : 'hit', posOf(e.target), this.materialOf(e.attacker));
           this.shake = Math.max(this.shake, e.knockdown ? 0.35 : heavy ? 0.25 : 0.15);
           if (e.counter && e.attacker === you) feed('CONTRA-GOLPE!', true);
@@ -359,6 +367,7 @@ export class GameEngine {
           this.sparkFx(e.target, '#bcd8ff', 8, e.attacker === you || e.target === you);
           if (e.attacker !== you && e.target !== you) break;
           this.sfxAt('block', posOf(e.target));
+          this.comicFx(e.target, 'block', 'TOC!', 0.8);
           if (e.target === you) this.shake = Math.max(this.shake, 0.08);
           break;
         case 'parry':
@@ -401,6 +410,7 @@ export class GameEngine {
           const mine = e.team === this.welcome?.team;
           feed(`${mine ? 'Seu time' : 'O rival'} dominou o ponto ${e.point}`, e.by.includes(you));
           if (e.by.includes(you)) playSound('buy', { volume: 0.8 });
+          if (mine) this.fireworks(3);
           break;
         }
         case 'pointLost':
@@ -409,7 +419,10 @@ export class GameEngine {
         case 'ko': {
           const mine = e.target === you || e.killer === you || e.assists.includes(you);
           feed(`${e.killer ? this.name(e.killer) : 'a sede'} nocauteou ${this.name(e.target)}`, mine);
-          if (mine) playSound('ko', { volume: 1.1 });
+          if (mine) {
+            playSound('ko', { volume: 1.1 });
+            this.comicFx(e.target, 'ko', 'K.O.!', 1.6);
+          }
           break;
         }
         case 'fury': {
@@ -426,7 +439,8 @@ export class GameEngine {
         case 'explosion': {
           const mine = e.fighter === you || e.hit.includes(you);
           this.throwFx?.explode(e.pos);
-          this.sfxAt('guardbreak', e.pos, undefined, 1.4);
+          this.sfxAt('explosion', e.pos, undefined, 1.4);
+          this.fx?.comic(new THREE.Vector3(e.pos.x, 2.2, e.pos.z), 'KABUM!', 'boom', 1.8);
           if (mine) playSound('special', { volume: 1.1 });
           feed(`Bomba de ${this.name(e.fighter)}${e.hit.length ? ` derrubou ${e.hit.length}` : ''}`, mine);
           break;
@@ -486,6 +500,25 @@ export class GameEngine {
     this.fx.number(v.root, kind === 'crit' ? `${n}!` : String(n), styles[kind]);
   }
 
+  private comicFx(target: string, style: ComicStyle, word: string, size: number): void {
+    const v = this.views.get(target);
+    if (!this.fx || !v) return;
+    this.fx.comic(v.root.position.clone().setY(v.root.position.y + 2.3), word, style, size);
+  }
+
+  /** Festa da torcida: rojões saem da borda do estádio e estouram no céu. Só visual + som. */
+  private fireworks(n: number): void {
+    const st = this.map?.stadium;
+    if (!this.fx || !st) return;
+    const colors = ['#ffd23f', '#ff4d5e', '#4dd2ff', '#7dff6a', '#ffffff', '#ff8af0'];
+    for (let i = 0; i < n; i++) {
+      const a = Math.PI + (i / Math.max(1, n - 1)) * Math.PI + (Math.random() - 0.5) * 0.3;
+      const from = new THREE.Vector3(st.x + Math.cos(a) * st.rx, st.h, st.z + Math.sin(a) * st.rz);
+      const to = from.clone().add(new THREE.Vector3((Math.random() - 0.5) * 8, 22 + Math.random() * 12, (Math.random() - 0.5) * 8));
+      this.fx.firework(from, to, colors[i % colors.length]!, i * 0.35 + Math.random() * 0.2, () => playSound('firework', { volume: 0.45 + Math.random() * 0.2, pan: (Math.random() - 0.5) * 0.8 }));
+    }
+  }
+
   private sparkFx(target: string, color: string, count: number, mine: boolean): void {
     const v = this.views.get(target);
     if (!this.fx || !v || (!mine && !this.nearMe(target))) return;
@@ -494,9 +527,9 @@ export class GameEngine {
 
   /** Sons que saem do estado (sem evento): assobio do golpe, passos, pulo, aterrissagem. */
   private stateSounds(f: FighterSnapshot, walked: number): void {
-    if (f.id !== this.welcome?.you) return; // só os seus passos, assobios e pulos
+    const mine = f.id === this.welcome?.you; // passos, assobios e pulos só os seus; tiros de todos
     const p = this.prev.get(f.id) ?? { move: null, stateTick: 0, y: f.y, air: false, step: 0, state: f.state };
-    if (f.state === 'attack' && f.move && (f.move !== p.move || f.stateTick < p.stateTick)) {
+    if (mine && f.state === 'attack' && f.move && (f.move !== p.move || f.stateTick < p.stateTick)) {
       const def = DEFAULT_COMBAT_DATA.weapons[f.weapon];
       const big = f.move.endsWith('.h') || f.move.endsWith('.esp') || def?.id === 'taco' || def?.id === 'barra';
       this.sfxAt(big ? 'bigWhoosh' : 'whoosh', f.pos, undefined, 0.8);
@@ -508,7 +541,11 @@ export class GameEngine {
       const dir = dirFromYaw(f.facing);
       const free = this.map ? segmentBoxHit(this.map.boxes, { x: f.pos.x, y: f.y + 1.35, z: f.pos.z }, { x: f.pos.x + dir.x * range, y: f.y + 1.35, z: f.pos.z + dir.z * range }) : 1;
       this.throwFx?.shot(f.pos, f.facing, range * free);
-      this.sfxAt('guardbreak', f.pos, undefined, 1.2);
+      this.sfxAt('gunshot', f.pos, undefined, 1.2);
+    }
+    if (!mine) {
+      this.prev.set(f.id, { ...p, stateTick: f.stateTick });
+      return;
     }
     if (f.airborne && !p.air && f.y > p.y) this.sfxAt('jump', f.pos, undefined, 0.7);
     if (!f.airborne && p.air) this.sfxAt('land', f.pos, undefined, 0.8);
@@ -546,10 +583,28 @@ export class GameEngine {
     else if (ally) prompts.push(`X (segure): levantar ${this.name(ally.id)}`);
     if (me.curativos > 0 && me.hp < c.maxHp * 0.5) prompts.push(`4: usar curativo (${me.curativos})`);
     else if (me.bandagens > 0 && me.hp < c.maxHp * 0.6) prompts.push(`5: bandagem (${me.bandagens})`);
+    const parkour = this.parkourHint(me, fighters);
+    if (parkour) prompts.push(parkour);
     if (me.inHand) prompts.push(`Clique: arremessar ${me.inHand === 'bomba' ? 'bomba' : 'gás'} · roda volta para a arma`);
     if (me.state === 'block' && me.stamina < c.maxStamina * 0.15) warnings.push('Guarda fraca: pouco fôlego');
     if (me.bleeding > 0 && me.curativos > 0) warnings.push('Sangrando: o curativo (4) estanca');
     return { prompts, warnings };
+  }
+
+  /** Travessia ao alcance (mesma busca do servidor) ou, em cima do carro com rival embaixo, o pisão. */
+  private parkourHint(me: FighterSnapshot, fighters: FighterSnapshot[]): string | null {
+    const self = this.predictor?.self;
+    if (!this.map || !self || me.state !== 'idle' || me.airborne) return null;
+    const c = DEFAULT_CONSTANTS;
+    if (me.y > 1) {
+      const below = fighters.some((f) => f.team !== me.team && f.state !== 'ko' && f.state !== 'dead' && me.y - f.y > 1 && Math.hypot(f.pos.x - me.pos.x, f.pos.z - me.pos.z) < 5);
+      return below ? 'Pule em cima deles e aperte Q: pisão' : null;
+    }
+    const len = Math.hypot(self.moveDir.x, self.moveDir.z);
+    if (len < 0.1) return null;
+    const plan = findTraverse(this.map, me.pos, me.y, { x: self.moveDir.x / len, z: self.moveDir.z / len }, c.hurtRadius, me.running, c.traverse);
+    if (!plan) return null;
+    return plan.kind === 'pular' ? 'Espaço: pular por cima' : plan.kind === 'capo' ? 'Espaço: deslizar no capô' : 'Espaço: subir';
   }
 
   /** Mesma regra do servidor (canRevive): dano recente ou inimigo perto impedem levantar. */
@@ -599,7 +654,7 @@ export class GameEngine {
         g.fillRect(0, 0, BW, 4);
         // Castelão (oval).
         g.beginPath();
-        g.ellipse(bx(STADIUM.x), bz(STADIUM.z), STADIUM.rx * sx, STADIUM.rz * sz, 0, 0, Math.PI * 2);
+        g.ellipse(bx(map.stadium.x), bz(map.stadium.z), map.stadium.rx * sx, map.stadium.rz * sz, 0, 0, Math.PI * 2);
         g.fillStyle = '#4b525d';
         g.fill();
         g.strokeStyle = '#c9d0da';
@@ -814,7 +869,8 @@ export class GameEngine {
         this.cb.onWheel(this.wheel, false);
         return;
       }
-      this.pitch = Math.max(-0.35, Math.min(1.1, this.pitch + e.movementY * 0.0022 * this.sens));
+      const sens = this.sens * (1 - 0.45 * this.aimT);
+      this.pitch = Math.max(-0.35, Math.min(1.1, this.pitch + e.movementY * 0.0022 * sens));
       if (this.meNow?.lockTarget) {
         // Mira grudada: o mouse não gira a câmera; um puxão forte para o lado troca de alvo.
         const now = performance.now();
@@ -827,7 +883,7 @@ export class GameEngine {
         }
         return;
       }
-      this.yaw -= e.movementX * 0.0028 * this.sens;
+      this.yaw -= e.movementX * 0.0028 * sens;
     });
     on(
       'wheel',
@@ -858,7 +914,7 @@ export class GameEngine {
     let buttons = this.latch;
     this.latch = 0;
     if (this.mouse & 1) buttons |= Buttons.LIGHT;
-    if (this.mouse & 2) buttons |= Buttons.HEAVY;
+    if (this.mouse & 2) buttons |= this.hasGun() ? Buttons.AIM : Buttons.HEAVY;
     if (this.keys.has('KeyF')) buttons |= Buttons.BLOCK;
     if (this.keys.has('KeyX')) buttons |= Buttons.USE;
     if (this.keys.has('ShiftLeft') || this.keys.has('ShiftRight')) buttons |= Buttons.RUN;
@@ -870,6 +926,12 @@ export class GameEngine {
    * Assistência leve de mira (sem lock-on): ao bater, puxa a mira para o inimigo mais perto
    * dentro de um cone curto e segura enquanto o golpe sai. Só muda o input: a predição bate.
    */
+  /** Arma de fogo na mão (não arremessável): o botão direito mira em vez de bater. */
+  private hasGun(): boolean {
+    const me = this.meNow;
+    return !!me && !me.inHand && !!DEFAULT_COMBAT_DATA.weapons[me.weapon]?.municao;
+  }
+
   private assistAim(buttons: number): number {
     const me = this.meNow;
     const now = performance.now();
@@ -1024,9 +1086,18 @@ export class GameEngine {
       const right = dirFromYaw(viewYaw - Math.PI / 2);
       // A altura acompanha o pé (teto do carro, pulo), suavizada para não trepidar.
       this.camY += (me.y - this.camY) * Math.min(1, dt * 7);
+      // Mirando: câmera chega perto do ombro e o campo de visão fecha (zoom de FPS).
+      const aiming = !!(this.mouse & 2) && this.hasGun() && this.inputEnabled;
+      this.aimT += ((aiming ? 1 : 0) - this.aimT) * Math.min(1, dt * 12);
+      const fov = 65 - 22 * this.aimT;
+      if (Math.abs(this.camera.fov - fov) > 0.01) {
+        this.camera.fov = fov;
+        this.camera.updateProjectionMatrix();
+      }
+      const dist = CAM_DIST * (1 - 0.5 * this.aimT);
       const pivot = new THREE.Vector3(me.pos.x + right.x * SHOULDER, 1.65 + this.camY, me.pos.z + right.z * SHOULDER);
-      const horiz = Math.cos(this.pitch) * CAM_DIST;
-      const cam = new THREE.Vector3(pivot.x - fwd.x * horiz, pivot.y + Math.sin(this.pitch) * CAM_DIST, pivot.z - fwd.z * horiz);
+      const horiz = Math.cos(this.pitch) * dist;
+      const cam = new THREE.Vector3(pivot.x - fwd.x * horiz, pivot.y + Math.sin(this.pitch) * dist, pivot.z - fwd.z * horiz);
       cam.x = Math.max(-this.map.halfW + 0.3, Math.min(this.map.halfW - 0.3, cam.x));
       cam.z = Math.max(-this.map.halfD + 0.3, Math.min(this.map.halfD - 0.3, cam.z));
       cam.y = Math.max(0.4 + this.camY, cam.y);
@@ -1072,6 +1143,7 @@ export class GameEngine {
         inEnemySede: !!sedes?.some((sd) => sd.team !== myTeam && inSede(sd.team)),
         respawnIn: me && (me.state === 'ko' || me.state === 'dead') ? Math.max(0, (me.koTick + sample.match.respawnTicks - tick) / 60) : null,
         pointerLocked: document.pointerLockElement === this.canvas,
+        aiming: this.aimT > 0.5,
         lockTargetNick: target ? this.name(target.id) : null,
         rtt: this.conn.rtt,
         perf: import.meta.env.DEV

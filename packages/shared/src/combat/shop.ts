@@ -5,8 +5,8 @@ import { DEFAULT_COMBAT_DATA } from './weapons';
 
 // Loja da partida (tecla J): em qualquer lugar (menos caído no chão). Dinheiro só vale na partida.
 
-/** true deixa tudo de graça (testes de ajuste). */
-export const FREE_SHOP = false;
+/** true deixa tudo de graça e liberado (sem nível). Por enquanto o jogo é todo gratuito. */
+export const FREE_SHOP = true;
 
 export const CURATIVO = {
   id: 'curativo',
@@ -40,7 +40,7 @@ export interface ShopItem {
 export function shopItems(data: CombatData = DEFAULT_COMBAT_DATA): ShopItem[] {
   const armas = Object.values(data.weapons)
     .filter((w): w is typeof w & { preco: number } => w.preco !== null)
-    .map((w): ShopItem => ({ id: w.id, nome: w.nome, preco: FREE_SHOP ? 0 : w.preco, tipo: 'arma', categoria: w.municao ? 'fogo' : 'branca', nivelMin: w.nivelMin ?? 1 }));
+    .map((w): ShopItem => ({ id: w.id, nome: w.nome, preco: FREE_SHOP ? 0 : w.preco, tipo: 'arma', categoria: w.municao ? 'fogo' : 'branca', nivelMin: FREE_SHOP ? 1 : (w.nivelMin ?? 1) }));
   const item = (i: { id: string; nome: string; preco: number }, categoria: ShopCategory): ShopItem => ({ id: i.id, nome: i.nome, preco: FREE_SHOP ? 0 : i.preco, tipo: 'item', categoria, nivelMin: 1 });
   const itens = [item(BOMBA, 'arremessavel'), item(GAS, 'arremessavel'), item(CURATIVO, 'equipamento'), item(BANDAGEM, 'equipamento'), item(COLETE, 'equipamento')];
   return [...armas, ...itens];

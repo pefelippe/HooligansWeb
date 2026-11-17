@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buy, canBuy, cloneSim, DEFAULT_COMBAT_DATA, DEFAULT_CONSTANTS, ECONOMY, shotFalloff } from '../src';
+import { buy, canBuy, cloneSim, DEFAULT_COMBAT_DATA, DEFAULT_CONSTANTS, ECONOMY, FREE_SHOP, shopItems, shotFalloff } from '../src';
 import { Buttons, duel, FACE_MINUS_Z, FACE_PLUS_Z, fighter, inp, ofType, run, tap } from './helpers';
 
 const { LIGHT, HEAVY, BLOCK, DODGE, SHOVE, KICK, RUN, JUMP } = Buttons;
@@ -359,29 +359,23 @@ describe('KO, respawn e economia', () => {
 describe('loja', () => {
   const sedes = [{ team: 0 as const, pos: { x: -20, z: 0 } }];
 
-  it('loja cobra o preço e funciona em qualquer lugar (até na sede do rival)', () => {
+  it('loja funciona em qualquer lugar (até na sede do rival)', () => {
     const { s, data } = duel({ sedes, b: { pos: { x: -20, z: 0 } } });
     const b = fighter(s, 'b');
-    expect(ECONOMY.startMoney).toBe(1000);
     expect(buy(s, b, 'barra', data).ok).toBe(true);
     expect(b.weapon).toBe('barra');
-    expect(b.money).toBe(ECONOMY.startMoney - (data.weapons.barra?.preco ?? 0));
   });
 
-  it('sem dinheiro ou sem nível, a compra é recusada e nada muda', () => {
+  it('por enquanto tudo é de graça e liberado: compra sem dinheiro e sem nível', () => {
+    expect(FREE_SHOP).toBe(true);
     const { s, data } = duel();
     const b = fighter(s, 'b');
-    b.level = 99;
-    b.money = 100;
-    expect(buy(s, b, 'barra', data)).toEqual({ ok: false, reason: 'saldo_insuficiente' });
-    expect(b.money).toBe(100);
-    expect(b.weapon).toBe('punhos');
     b.level = 1;
-    b.money = 9000;
-    expect(buy(s, b, 'pistola', data)).toEqual({ ok: false, reason: 'nivel' });
-    b.level = data.weapons.pistola?.nivelMin ?? 1;
+    b.money = 0;
     expect(buy(s, b, 'pistola', data).ok).toBe(true);
+    expect(b.money).toBe(0);
     expect(b.durability).toBe(data.weapons.pistola?.municao);
+    expect(shopItems(data).every((i) => i.preco === 0 && i.nivelMin === 1)).toBe(true);
   });
   it('colete segura metade do dano até gastar', () => {
     const { s, data } = duel();

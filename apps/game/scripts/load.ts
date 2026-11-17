@@ -1,16 +1,17 @@
 // Carga: N partidas cheias de bots no mesmo processo, medindo o tick e o custo do snapshot binário.
-// Uso: pnpm --filter @torcidas/game load [partidas=5] [segundos=20]
+// Uso: pnpm --filter @torcidas/game load [partidas=5] [segundos=20] [tamanho=10]
 import { encodeSnapshot, type ServerMessage, TICK_RATE } from '@torcidas/shared';
 import { GameMatch } from '../src/match';
 
 const n = Number(process.argv[2] ?? 5);
 const seconds = Number(process.argv[3] ?? 20);
+const tamanho = Number(process.argv[4] ?? 10);
 let bytes = 0;
 let snaps = 0;
 let jsonBytes = 0;
 const matches = Array.from({ length: n }, (_, i) => {
-  const m = new GameMatch(`load-${i}`, i + 1, () => {});
-  // Um "cliente" por partida que só mede o snapshot (os 20 lutadores são bots).
+  const m = new GameMatch(`load-${i}`, i + 1, () => {}, { bots: [tamanho, tamanho], maxPerTeam: tamanho });
+  // Um "cliente" por partida que só mede o snapshot (os lutadores são bots).
   m.join({
     userId: `obs-${i}`,
     nick: 'obs',
@@ -39,5 +40,5 @@ console.log({
   tickTodasMs: { p50: pct(0.5), p99: pct(0.99), max: times[times.length - 1]!.toFixed(2), orcamento: (1000 / TICK_RATE).toFixed(2) },
   snapshotBytesMedio: Math.round(bytes / Math.max(1, snaps)),
   jsonBytesMedio: Math.round(jsonBytes / Math.max(1, snaps)),
-  kbpsPorJogador: Math.round(((bytes / Math.max(1, snaps)) * 30 * 8) / 1000),
+  kbpsPorJogador: Math.round((bytes * 8) / n / seconds / 1000),
 });

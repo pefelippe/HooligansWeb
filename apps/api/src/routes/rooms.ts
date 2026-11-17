@@ -1,4 +1,4 @@
-import { getTorcida, levelFromXp, ROOM, validateVisual } from '@torcidas/shared';
+import { getTorcida, isMatchSize, levelFromXp, ROOM, validateVisual } from '@torcidas/shared';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { db, schema } from '../db';
@@ -42,13 +42,15 @@ export async function roomRoutes(app: FastifyInstance) {
     return reply.code(r.ok ? 200 : r.status).send(r.body);
   });
 
-  app.post<{ Body: { nome?: unknown; publica?: unknown } }>('/rooms', async (req, reply) => {
+  app.post<{ Body: { nome?: unknown; publica?: unknown; tamanho?: unknown } }>('/rooms', async (req, reply) => {
     const pl = await player(req, reply);
     if (!pl) return reply;
     const raw = typeof req.body?.nome === 'string' ? req.body.nome.trim().replace(/\s+/g, ' ') : '';
     const nome = raw || `Sala de ${pl.nick}`;
     if (nome.length < ROOM.nameMin || nome.length > ROOM.nameMax) return reply.code(400).send({ error: 'nome_invalido' });
-    const r = await game('/internal/rooms', { method: 'POST', body: { nome, publica: req.body?.publica === true, leaderId: pl.userId } });
+    const tamanho = req.body?.tamanho ?? ROOM.defaultSize;
+    if (!isMatchSize(tamanho)) return reply.code(400).send({ error: 'tamanho_invalido' });
+    const r = await game('/internal/rooms', { method: 'POST', body: { nome, publica: req.body?.publica === true, leaderId: pl.userId, tamanho } });
     if (!r.ok) return reply.code(r.status).send(r.body);
     const { roomId, code } = r.body as { roomId: string; code: string };
     return { code, ticket: await ticketFor(pl, roomId), serverUrl: env.GAME_PUBLIC_URL };

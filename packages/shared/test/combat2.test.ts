@@ -25,6 +25,28 @@ describe('esquiva: passo e rolamento', () => {
     expect(a2.pos.z).toBeCloseTo(C.dodge.roll.distance, 1);
   });
 
+  it('o C tem recarga: antes dela não esquiva de novo', () => {
+    const r = duel({ b: FAR });
+    // Aperta correr + esquiva no próximo tick (o tick do script é absoluto).
+    const rollNow = () => {
+      const at = r.s.tick + 1;
+      run(r.s, r.data, 2, (t) => ({ a: inp(t === at ? RUN | DODGE : 0, FACE_PLUS_Z, 0, t === at ? 1 : 0) }));
+    };
+    rollNow();
+    const a = fighter(r.s, 'a');
+    expect(a.dodgeKind).toBe('roll');
+    run(r.s, r.data, 40);
+    a.stamina = C.maxStamina;
+    const x = a.pos.x, z = a.pos.z;
+    rollNow();
+    expect(a.state).not.toBe('dodge');
+    expect(Math.hypot(a.pos.x - x, a.pos.z - z)).toBeLessThan(0.5);
+    run(r.s, r.data, C.dodge.roll.cooldownTicks);
+    a.stamina = C.maxStamina;
+    rollNow();
+    expect(a.dodgeKind).toBe('roll');
+  });
+
   // Distância 0 para isolar o timing (o alvo não sai do alcance).
   function still() {
     const r = duel();
@@ -50,6 +72,59 @@ describe('esquiva: passo e rolamento', () => {
     expect(fighter(s, 'b').dodgeKind).toBe('roll');
     expect(ofType(ev, 'hit')).toHaveLength(0);
     expect(ofType(ev, 'perfectDodge')).toHaveLength(0);
+  });
+});
+
+describe('pulo', () => {
+  it('tem recarga: depois de pousar, só pula de novo quando ela acaba', () => {
+    const r = duel({ b: FAR });
+    const a = fighter(r.s, 'a');
+    const jumpNow = () => {
+      const at = r.s.tick + 1;
+      run(r.s, r.data, 1, (t) => ({ a: inp(t === at ? JUMP : 0, FACE_PLUS_Z) }));
+    };
+    jumpNow();
+    expect(a.vy).toBeGreaterThan(0);
+    run(r.s, r.data, 40); // pousou (~0,55 s no ar)
+    expect(a.vy).toBe(0);
+    jumpNow();
+    expect(a.vy).toBe(0);
+    run(r.s, r.data, C.jumpCooldownTicks);
+    a.stamina = C.maxStamina;
+    jumpNow();
+    expect(a.vy).toBeGreaterThan(0);
+  });
+});
+
+describe('mirar com arma de fogo', () => {
+  const AIM = Buttons.AIM;
+  it('mirando não corre e anda mais devagar', () => {
+    const r = duel({ a: { weapon: 'pistola' }, b: FAR });
+    const a = fighter(r.s, 'a');
+    run(r.s, r.data, 30, () => ({ a: inp(AIM | RUN, FACE_PLUS_Z, 0, 1) }));
+    expect(a.aiming).toBe(true);
+    expect(a.running).toBe(false);
+    expect(a.pos.z).toBeCloseTo((C.aimWalkSpeed * 30) / 60, 1);
+  });
+
+  it('pular mirando rola para o lado do strafe (parado: direita), sem pular', () => {
+    for (const [moveX, side] of [[0, 1], [1, 1], [-1, -1]] as const) {
+      const r = duel({ a: { weapon: 'pistola' }, b: FAR });
+      const a = fighter(r.s, 'a');
+      // Mirando para +Z: a direita é -X (dirFromYaw(yaw - PI/2)).
+      run(r.s, r.data, 2, (t) => ({ a: inp(AIM | (t === 1 ? JUMP : 0), FACE_PLUS_Z, t === 1 ? -moveX : 0, 0) }));
+      expect(a.state).toBe('dodge');
+      expect(a.vy).toBe(0);
+      expect(Math.sign(-a.dodgeDir.x)).toBe(side);
+    }
+  });
+
+  it('sem arma de fogo, o botão de mira não faz nada', () => {
+    const r = duel({ b: FAR });
+    const a = fighter(r.s, 'a');
+    run(r.s, r.data, 2, (t) => ({ a: inp(AIM | (t === 1 ? JUMP : 0), FACE_PLUS_Z) }));
+    expect(a.aiming).toBe(false);
+    expect(a.vy).toBeGreaterThan(0);
   });
 });
 

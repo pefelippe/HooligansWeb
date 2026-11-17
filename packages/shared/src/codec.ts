@@ -57,6 +57,7 @@ const FIGHTER_FIELDS: readonly (readonly [keyof FighterSnapshot, FieldType])[] =
   ['slowed', 'bool'],
   ['buffed', 'bool'],
   ['counter', 'bool'],
+  ['aiming', 'bool'],
   ['dodgeKind', 'str'],
   ['airborne', 'bool'],
   ['traverse', 'str?'],

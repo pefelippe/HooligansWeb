@@ -82,9 +82,21 @@ const FACE_PROC: Face = {
   jaw: new THREE.Vector3(0.09, 0.075, 0.1),
   painted: false,
 };
-const HAND_FIT = {
-  offset: new THREE.Vector3(-0.08, 0, 0),
-  quat: new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(new THREE.Vector3(0, -1, 0), new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, 1))),
+// Mão do glTF (espaço do osso hand_r): +Y vai para os dedos, +Z para o lado do polegar/indicador,
+// -X é a palma. Os clipes deixam o punho sempre fechado; o buraco do punho fica aqui.
+const GRIP_HOLE = new THREE.Vector3(-0.025, 0.09, 0);
+const basis = (x: THREE.Vector3Tuple, y: THREE.Vector3Tuple, z: THREE.Vector3Tuple) =>
+  new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(new THREE.Vector3(...x), new THREE.Vector3(...y), new THREE.Vector3(...z)));
+/** Orientação da arma (+Z = lâmina/cano) no espaço da mão do glTF. */
+const SKINNED_GRIP: Record<string, THREE.Quaternion> = {
+  // Cabo atravessa o punho (mindinho→indicador); a lâmina sai pelo lado do polegar, um pouco inclinada.
+  melee: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -0.25),
+  // Lata deitada no punho.
+  can: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2),
+  // Soqueira atravessada sobre os nós dos dedos.
+  soqueira: basis([0, 0, 1], [1, 0, 0], [0, 1, 0]),
+  // Cabo no punho descendo para o mindinho, cano para frente dos dedos.
+  gun: basis([-1, 0, 0], [0, 0, 1], [0, 1, 0]),
 };
 
 interface Pose {
@@ -361,8 +373,9 @@ export class CharacterView {
       this.vest.add(vest);
       this.vest.visible = false;
       sk.mount('spine_03', this.vest, sk.restPos('spine_03').add(new THREE.Vector3(0, 0.0, 0.02)), new THREE.Quaternion());
-      // Mão: o -Y do grupo segue o osso até os dedos e o +Z aponta para a frente, como no antebraço procedural.
-      sk.mount('hand_r', this.handR, sk.restPos('hand_r').add(HAND_FIT.offset), HAND_FIT.quat);
+      // Âncora da arma no buraco do punho, nos eixos do osso da mão (ver GRIP_HOLE).
+      sk.bone('hand_r')?.add(this.handR);
+      this.handR.position.copy(GRIP_HOLE);
       this.grip.matrixAutoUpdate = false;
       this.grip.add(this.weapon);
       this.root.add(this.grip);
@@ -912,6 +925,11 @@ export class CharacterView {
         this.weapon.add(barrel, grip);
         break;
       }
+    }
+    // As rotações acima são do antebraço procedural; no glTF a arma segue o osso da mão.
+    if (this.skinned) {
+      const kind = id === 'soqueira' ? 'soqueira' : id === 'bomba' || id === 'gas' ? 'can' : id === 'pistola' || id === 'revolver' ? 'gun' : 'melee';
+      this.weapon.quaternion.copy(SKINNED_GRIP[kind]!);
     }
   }
 

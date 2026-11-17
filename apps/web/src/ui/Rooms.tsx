@@ -1,4 +1,4 @@
-import { ROOM, type RoomSummary } from '@torcidas/shared';
+import { MATCH_SIZES, type MatchSize, ROOM, type RoomSummary } from '@torcidas/shared';
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 
@@ -12,6 +12,7 @@ const ERRORS: Record<string, string> = {
   sala_inexistente: 'Não existe sala com esse código',
   expulso: 'Você foi expulso dessa sala',
   sala_cheia: 'A sala está cheia',
+  tamanho_invalido: 'Escolha 1×1, 5×5, 10×10 ou 20×20',
   time_cheio: 'A sala está cheia para a sua torcida',
   nome_invalido: `O nome da sala precisa ter de ${ROOM.nameMin} a ${ROOM.nameMax} caracteres`,
   codigo_invalido: 'Digite o código da sala',
@@ -26,6 +27,7 @@ export function Rooms({ onEnter }: { onEnter: (r: RoomEntry) => void }) {
   const [creating, setCreating] = useState(false);
   const [nome, setNome] = useState('');
   const [publica, setPublica] = useState(true);
+  const [tamanho, setTamanho] = useState<MatchSize>(ROOM.defaultSize);
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -71,7 +73,7 @@ export function Rooms({ onEnter }: { onEnter: (r: RoomEntry) => void }) {
           className="room-create"
           onSubmit={(e) => {
             e.preventDefault();
-            void go('/rooms', { nome, publica });
+            void go('/rooms', { nome, publica, tamanho });
           }}
         >
           <label className="field">
@@ -86,8 +88,16 @@ export function Rooms({ onEnter }: { onEnter: (r: RoomEntry) => void }) {
               Privada
             </button>
           </div>
+          <div className="segmented" role="radiogroup" aria-label="Tamanho da partida">
+            {MATCH_SIZES.map((n) => (
+              <button key={n} type="button" role="radio" aria-checked={tamanho === n} className={tamanho === n ? 'on' : ''} onClick={() => setTamanho(n)}>
+                {n}×{n}
+              </button>
+            ))}
+          </div>
           <small className="fine">
-            {publica ? 'Aparece na lista para todo mundo.' : 'Só entra quem tiver o código ou o link.'} Até {ROOM.maxPlayers} lutadores, {ROOM.maxPerTeam} por torcida.
+            {publica ? 'Aparece na lista para todo mundo.' : 'Só entra quem tiver o código ou o link.'} {tamanho} por torcida, bots completam as vagas.{' '}
+            {tamanho <= 5 ? 'Mapa pequeno, só a praça do meio.' : tamanho <= 10 ? 'Mapa médio, 3 praças.' : 'Mapa grande, 3 praças.'}
           </small>
           <button className="primary" disabled={busy}>
             Criar e entrar
@@ -122,7 +132,7 @@ export function Rooms({ onEnter }: { onEnter: (r: RoomEntry) => void }) {
             <div>
               <b>{r.nome}</b>
               <small>
-                {r.lider} · {r.humanos} {r.humanos === 1 ? 'pessoa' : 'pessoas'} · {r.total}/{ROOM.maxPlayers} · {r.fase === 'playing' ? 'em partida' : 'no lobby'}
+                {r.tamanho}×{r.tamanho} · {r.lider} · {r.humanos} {r.humanos === 1 ? 'pessoa' : 'pessoas'} · {r.total}/{r.tamanho * 2} · {r.fase === 'playing' ? 'em partida' : 'no lobby'}
               </small>
             </div>
             <button className="secondary" disabled={busy} onClick={() => void go('/rooms/join', { code: r.code })}>

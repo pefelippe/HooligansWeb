@@ -33,7 +33,7 @@ describe('pickAnim', () => {
     expect(pickAnim(idle, undefined, 0, () => clip).clip).toBe('Idle_Loop');
     expect(pickAnim(idle, undefined, 1.4, () => clip).clip).toBe('Walk_Loop');
     expect(pickAnim({ ...idle, running: true }, undefined, 6.5, () => clip)).toMatchObject({ clip: 'Sprint_Loop', speed: 1 });
-    expect(pickAnim({ ...idle, airborne: true }, undefined, 3, () => clip).clip).toBe('Jump_Loop');
+    expect(pickAnim({ ...idle, airborne: true }, undefined, 3, () => clip)).toMatchObject({ clip: 'Idle_Loop', tuck: 1 });
   });
   it('knockdown cai, fica no chão e levanta sem pular quadro no getup', () => {
     const lay = { duration: 1.53, impact: 0.4 };

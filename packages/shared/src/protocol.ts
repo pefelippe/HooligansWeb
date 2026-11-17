@@ -4,10 +4,11 @@ import { DEFAULT_COMBAT_DATA } from './combat/weapons';
 import type { PlayerInput } from './combat/input';
 import type { PerTeam, TeamSide, Vec2 } from './combat/types';
 import type { ControlPointState, MatchEvent, MatchResult, MatchState, RosterEntry } from './match';
+import type { MapSize, MatchSize } from './map';
 import type { CharacterVisual } from './visual';
 
 // Protocolo cliente <-> game server (JSON por enquanto; binário depois do marco de netcode).
-export const PROTOCOL_VERSION = 7;
+export const PROTOCOL_VERSION = 9;
 
 /** Claims do ticket JWT emitido pela API ao entrar na fila. */
 export interface MatchTicketClaims {
@@ -24,8 +25,8 @@ export interface MatchTicketClaims {
 
 // ---------------------------------------------------------------- salas (lobby)
 
-/** Sala: até 50 lutadores (humanos + bots), no máximo 25 por torcida. */
-export const ROOM = { maxPlayers: 50, maxPerTeam: 25, nameMin: 3, nameMax: 32 } as const;
+/** Sala: o líder escolhe o tamanho (1×1 a 20×20) ao criar; o tamanho define o mapa. */
+export const ROOM = { nameMin: 3, nameMax: 32, defaultSize: 10 as MatchSize } as const;
 
 /** Claims do ticket de sala, emitido pela API ao criar/entrar. Vale para o WebSocket do lobby. */
 export interface RoomTicketClaims {
@@ -54,6 +55,8 @@ export interface RoomInfo {
   players: RoomPlayer[];
   /** Bots configurados por time. */
   bots: PerTeam;
+  /** Lutadores por torcida (humanos + bots). */
+  tamanho: MatchSize;
 }
 
 /** Linha da lista de salas públicas. */
@@ -64,6 +67,7 @@ export interface RoomSummary {
   humanos: number;
   total: number;
   fase: RoomInfo['fase'];
+  tamanho: MatchSize;
 }
 
 export type LobbyClientMessage =
@@ -138,6 +142,8 @@ export interface FighterSnapshot {
   buffed: boolean;
   /** Janela de contra-golpe aberta. */
   counter: boolean;
+  /** Mirando com arma de fogo. */
+  aiming: boolean;
   dodgeKind: 'step' | 'roll' | 'land';
   /** No ar em relação ao chão debaixo do pé (em cima do carro não conta). */
   airborne: boolean;
@@ -171,7 +177,7 @@ export function toMatchInfo(m: MatchState, ticksLeft: number): MatchSnapshotInfo
 }
 
 export type ServerMessage =
-  | { t: 'welcome'; you: string; matchId: string; team: TeamSide; tick: number; seed: number }
+  | { t: 'welcome'; you: string; matchId: string; team: TeamSide; tick: number; seed: number; mapSize: MapSize }
   | { t: 'roster'; players: RosterEntry[] }
   /** `self`: estado completo do seu lutador, para a predição reconciliar. */
   | { t: 'snapshot'; tick: number; ackSeq: number; match: MatchSnapshotInfo; fighters: FighterSnapshot[]; self?: Fighter; throws?: Throwable[]; clouds?: GasCloud[] }
@@ -223,6 +229,7 @@ export function toSnapshot(s: SimState, f: Fighter, data = DEFAULT_COMBAT_DATA):
     slowed: s.tick < f.slowUntil,
     buffed: s.tick <= f.buffUntil,
     counter: s.tick <= f.counterUntil,
+    aiming: f.aiming,
     dodgeKind: f.dodgeKind,
     airborne: isAirborne(f),
     traverse: f.traverse?.kind ?? null,

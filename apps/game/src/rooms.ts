@@ -1,4 +1,4 @@
-import { type CharacterVisual, isTeam, type LobbyServerMessage, type MatchTicketClaims, ROOM, type RoomInfo, type RoomSummary, type TeamSide } from '@torcidas/shared';
+import { type CharacterVisual, isTeam, type LobbyServerMessage, type MatchSize, type MatchTicketClaims, type RoomInfo, type RoomSummary, type TeamSide } from '@torcidas/shared';
 import { randomInt, randomUUID } from 'node:crypto';
 
 // Salas: lobby + partidas. O líder configura (bots, pública/privada, expulsar) e começa;
@@ -14,7 +14,7 @@ export interface RoomMatch {
 
 export interface RoomDeps {
   /** Cria e registra uma partida; `onEnd` volta a sala para o lobby. */
-  createMatch(roomId: string, bots: [number, number], onEnd: () => void): RoomMatch;
+  createMatch(roomId: string, bots: [number, number], tamanho: MatchSize, onEnd: () => void): RoomMatch;
   signMatchTicket(claims: MatchTicketClaims): Promise<string>;
   serverUrl: string;
 }
@@ -38,7 +38,8 @@ export class Room {
   private readonly members = new Map<string, RoomMember & { joinedAt: number }>();
   private readonly banned = new Set<string>();
   private joinSeq = 0;
-  bots: [number, number] = [5, 5];
+  /** Bots completam as vagas: cada humano que entra tira um do time dele. */
+  bots: [number, number];
   match: RoomMatch | null = null;
   /** Momento em que ficou vazia (para apagar depois de um tempo). */
   emptySince: number | null = null;
@@ -50,8 +51,10 @@ export class Room {
     /** Quem criou: vira líder ao entrar (até lá, ninguém é). */
     private leaderId: string,
     private readonly deps: RoomDeps,
+    readonly tamanho: MatchSize,
   ) {
     this.emptySince = Date.now();
+    this.bots = [tamanho, tamanho];
   }
 
   get fase(): RoomInfo['fase'] {
@@ -81,9 +84,9 @@ export class Room {
   canJoin(userId: string, team: TeamSide): RoomError | null {
     if (this.banned.has(userId)) return 'expulso';
     if (this.members.has(userId)) return null; // reconectando
-    if (this.humans(team) >= ROOM.maxPerTeam) return 'time_cheio';
+    if (this.humans(team) >= this.tamanho) return 'time_cheio';
     // Bots cedem a vaga para humanos; só humanos contam para "sala cheia".
-    if (this.members.size >= ROOM.maxPlayers) return 'sala_cheia';
+    if (this.members.size >= this.tamanho * 2) return 'sala_cheia';
     return null;
   }
 
@@ -96,7 +99,7 @@ export class Room {
     this.members.set(m.userId, { ...m, joinedAt: prev?.joinedAt ?? this.joinSeq++ });
     this.emptySince = null;
     // Humano tira um bot se o time estourar o máximo.
-    if (this.humans(m.team) + this.bots[m.team] > ROOM.maxPerTeam) this.bots[m.team] = ROOM.maxPerTeam - this.humans(m.team);
+    if (this.humans(m.team) + this.bots[m.team] > this.tamanho) this.bots[m.team] = this.tamanho - this.humans(m.team);
     if (!this.members.has(this.leaderId)) this.leaderId = this.oldest() ?? m.userId;
     this.broadcast();
     // Partida rolando: já manda o ticket para entrar nela.
@@ -129,7 +132,7 @@ export class Room {
   setBots(by: string, team: TeamSide, count: number): RoomError | null {
     if (by !== this.leaderId) return 'so_o_lider';
     if (!isTeam(team) || !Number.isInteger(count)) return 'invalido';
-    this.bots[team] = Math.max(0, Math.min(count, ROOM.maxPerTeam - this.humans(team)));
+    this.bots[team] = Math.max(0, Math.min(count, this.tamanho - this.humans(team)));
     if (this.match?.playing) this.match.setBots(team, this.bots[team]);
     this.broadcast();
     return null;
@@ -146,7 +149,7 @@ export class Room {
     if (by !== this.leaderId) return 'so_o_lider';
     if (this.match?.playing) return 'ja_em_partida';
     if (!this.members.size) return 'sem_jogadores';
-    const match = this.deps.createMatch(this.id, [...this.bots], () => {
+    const match = this.deps.createMatch(this.id, [...this.bots], this.tamanho, () => {
       if (this.match === match) this.broadcast(); // fase volta para 'lobby'
     });
     this.match = match;
@@ -165,12 +168,12 @@ export class Room {
 
   info(): RoomInfo {
     const players = [...this.members.values()].sort((a, b) => a.joinedAt - b.joinedAt).map((m) => ({ id: m.userId, nick: m.nick, team: m.team }));
-    return { id: this.id, code: this.code, nome: this.nome, publica: this.publica, liderId: this.leaderId, fase: this.fase, players, bots: [...this.bots] };
+    return { id: this.id, code: this.code, nome: this.nome, publica: this.publica, liderId: this.leaderId, fase: this.fase, players, bots: [...this.bots], tamanho: this.tamanho };
   }
 
   summary(): RoomSummary {
     const lider = this.members.get(this.leaderId)?.nick ?? '';
-    return { code: this.code, nome: this.nome, lider, humanos: this.members.size, total: this.total, fase: this.fase };
+    return { code: this.code, nome: this.nome, lider, humanos: this.members.size, total: this.total, fase: this.fase, tamanho: this.tamanho };
   }
 
   private async sendMatchTicket(userId: string): Promise<void> {
@@ -208,11 +211,11 @@ export class RoomManager {
 
   constructor(private readonly deps: RoomDeps) {}
 
-  create(nome: string, publica: boolean, leaderId: string): Room {
+  create(nome: string, publica: boolean, leaderId: string, tamanho: MatchSize): Room {
     let code = '';
     do code = Array.from({ length: 6 }, () => CODE_CHARS[randomInt(CODE_CHARS.length)]).join('');
     while (this.byCode.has(code));
-    const room = new Room(code, nome, publica, leaderId, this.deps);
+    const room = new Room(code, nome, publica, leaderId, this.deps, tamanho);
     this.byId.set(room.id, room);
     this.byCode.set(code, room);
     return room;

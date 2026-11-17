@@ -25,7 +25,10 @@ export type SoundName =
   | 'revive'
   | 'buy'
   | 'deny'
-  | 'weaponBreak';
+  | 'weaponBreak'
+  | 'gunshot'
+  | 'explosion'
+  | 'firework';
 
 export interface SoundOpts {
   volume?: number;
@@ -36,6 +39,8 @@ export interface SoundOpts {
 let ctx: AudioContext | null = null;
 let master: GainNode | null = null;
 let noiseBuf: AudioBuffer | null = null;
+/** Envio para o eco de rua (convolução com resposta ao impulso gerada). */
+let reverb: AudioNode | null = null;
 let muted = false;
 
 function audio(): AudioContext | null {
@@ -48,6 +53,12 @@ function audio(): AudioContext | null {
       const comp = ctx.createDynamicsCompressor();
       comp.threshold.value = -14;
       master.connect(comp).connect(ctx.destination);
+      const conv = ctx.createConvolver();
+      conv.buffer = impulse(ctx, 1.6);
+      const wet = ctx.createGain();
+      wet.gain.value = 0.5;
+      conv.connect(wet).connect(master);
+      reverb = conv;
     }
     if (ctx.state === 'suspended') void ctx.resume();
     return ctx;
@@ -84,12 +95,43 @@ function noise(a: AudioContext): AudioBuffer {
   return noiseBuf;
 }
 
-function out(a: AudioContext, o: SoundOpts): AudioNode {
+/** Resposta ao impulso de rua aberta: ruído com decaimento exponencial e ecos esparsos nas fachadas. */
+function impulse(a: AudioContext, secs: number): AudioBuffer {
+  const len = Math.floor(a.sampleRate * secs);
+  const buf = a.createBuffer(2, len, a.sampleRate);
+  for (let c = 0; c < 2; c++) {
+    const ch = buf.getChannelData(c);
+    for (let i = 0; i < len; i++) ch[i] = (Math.random() * 2 - 1) * Math.exp((-4.5 * i) / len) * 0.5;
+    for (const ms of [70, 130, 210, 330]) {
+      const at = Math.floor((ms + c * 9) * a.sampleRate / 1000);
+      for (let i = 0; i < 300 && at + i < len; i++) ch[at + i]! += (Math.random() * 2 - 1) * 0.6 * Math.exp(-i / 60) * Math.exp(-ms / 250);
+    }
+  }
+  return buf;
+}
+
+/** Saturação (tanh): dá o "rasgado" de estampido e explosão. */
+function drive(a: AudioContext, dest: AudioNode, amount: number): AudioNode {
+  const ws = a.createWaveShaper();
+  const curve = new Float32Array(1024);
+  for (let i = 0; i < curve.length; i++) curve[i] = Math.tanh(((i / 511.5) - 1) * amount) / Math.tanh(amount);
+  ws.curve = curve;
+  ws.connect(dest);
+  return ws;
+}
+
+function out(a: AudioContext, o: SoundOpts, wet = 0.08): AudioNode {
   const g = a.createGain();
   g.gain.value = Math.max(0, Math.min(1.5, o.volume ?? 1));
   const p = a.createStereoPanner();
   p.pan.value = Math.max(-1, Math.min(1, o.pan ?? 0));
   g.connect(p).connect(master ?? a.destination);
+  if (reverb && wet > 0) {
+    const send = a.createGain();
+    // Longe soa mais "eco" que direto.
+    send.gain.value = wet * (1 + (1 - Math.min(1, o.volume ?? 1)) * 2);
+    p.connect(send).connect(reverb);
+  }
   return g;
 }
 
@@ -159,8 +201,11 @@ export function playSound(name: SoundName, o: SoundOpts = {}): void {
   if (!a || muted) return;
   const vol = o.volume ?? 1;
   if (vol < 0.02) return;
-  const d = out(a, o);
+  const big = name === 'gunshot' || name === 'explosion' || name === 'firework';
+  const d = out(a, o, big ? 0.35 : 0.08);
   const t = a.currentTime;
+  // Variação: o mesmo som repetido não soa como máquina.
+  const v = 0.92 + Math.random() * 0.16;
   switch (name) {
     case 'hit':
       impact(a, d, t, o.material ?? 'carne', false);
@@ -245,6 +290,45 @@ export function playSound(name: SoundName, o: SoundOpts = {}): void {
       burst(a, d, t, 0.3, 'highpass', 3000, 0.3);
       tone(a, d, t, 0.2, 'triangle', 900, 300, 0.1);
       break;
+    case 'gunshot': {
+      // Estalo supersônico + corpo saturado + soco grave; a cauda vem do eco.
+      const x = drive(a, d, 4);
+      burst(a, d, t, 0.012, 'highpass', 2500, 1.2);
+      burst(a, x, t, 0.09 * v, 'bandpass', 1100 * v, 1.4, 0.7, 350);
+      burst(a, x, t, 0.18, 'lowpass', 2200, 0.5, 0.7, 300);
+      tone(a, x, t, 0.12, 'sine', 160 * v, 45, 0.9, 0.001);
+      // Mecanismo (cão/ferrolho) logo depois.
+      burst(a, d, t + 0.07, 0.02, 'bandpass', 3800, 0.12, 4);
+      break;
+    }
+    case 'explosion': {
+      const x = drive(a, d, 6);
+      // Frente de choque.
+      burst(a, d, t, 0.02, 'highpass', 1500, 1.4);
+      burst(a, x, t, 0.25, 'bandpass', 900 * v, 1.2, 0.6, 200);
+      // Bum grave e ronco longo descendo.
+      tone(a, x, t, 1.1, 'sine', 70 * v, 22, 1.2, 0.003);
+      tone(a, x, t, 0.5, 'triangle', 110 * v, 30, 0.5, 0.003);
+      burst(a, x, t, 1.8, 'lowpass', 2500, 1.0, 0.8, 90);
+      // Detritos caindo.
+      for (let i = 0; i < 14; i++) {
+        const dt = 0.25 + Math.random() * 1.1;
+        burst(a, d, t + dt, 0.015 + Math.random() * 0.03, 'bandpass', 1500 + Math.random() * 3500, 0.08 + Math.random() * 0.1, 3);
+      }
+      break;
+    }
+    case 'firework': {
+      // Estouro seco no céu + crepitar (o assobio de subida é do engine, longe).
+      const x = drive(a, d, 3);
+      burst(a, d, t, 0.015, 'highpass', 2000, 0.9);
+      tone(a, x, t, 0.5, 'sine', 90 * v, 30, 0.7, 0.002);
+      burst(a, x, t, 0.4, 'lowpass', 1800, 0.6, 0.7, 150);
+      for (let i = 0; i < 26; i++) {
+        const dt = 0.35 + Math.random() * 1.2;
+        burst(a, d, t + dt, 0.008 + Math.random() * 0.012, 'highpass', 3000 + Math.random() * 4000, 0.06 + Math.random() * 0.12);
+      }
+      break;
+    }
   }
 }
 

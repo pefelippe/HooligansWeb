@@ -264,6 +264,8 @@ export class SkinnedFighter {
   private readonly asset: FighterAsset;
   private current: THREE.AnimationAction | null = null;
   private readonly thighR: THREE.Object3D | undefined;
+  /** Ossos da pose de pulo: [osso, ângulo em torno do X do modelo com tuck = 1]. */
+  private readonly tuckBones: [THREE.Object3D, number][];
   private readonly hipTilt: THREE.Object3D | undefined;
   private readonly overridden: [THREE.Object3D, THREE.Quaternion][] = [];
 
@@ -308,6 +310,12 @@ export class SkinnedFighter {
     this.object.scale.set(width, 1, width);
     this.mixer = new THREE.AnimationMixer(this.object);
     this.thighR = this.object.getObjectByName('thigh_r');
+    // Ordem pai → filho: a canela gira depois da coxa já girada.
+    const tuck: [string, number][] = [['thigh_r', -1.5], ['calf_r', 1.7], ['thigh_l', -0.5], ['calf_l', 0.9], ['lowerarm_l', -0.7], ['lowerarm_r', -0.7]];
+    this.tuckBones = tuck.flatMap(([n, a]) => {
+      const b = this.object.getObjectByName(n);
+      return b ? [[b, a] as [THREE.Object3D, number]] : [];
+    });
     this.hipTilt = this.object.getObjectByName('spine_01');
   }
 
@@ -376,6 +384,12 @@ export class SkinnedFighter {
       }
     }
     this.mixer.update(dt);
+    if (pick.tuck) {
+      this.object.updateMatrixWorld(true);
+      this.object.getWorldQuaternion(_r);
+      _x.set(1, 0, 0).applyQuaternion(_r);
+      for (const [bone, a] of this.tuckBones) this.rotateWorld(bone, _r.setFromAxisAngle(_x, a * pick.tuck));
+    }
     if (pick.kick && this.thighR) {
       // Chute: gira a coxa para a frente em torno do X do modelo, por cima do clipe.
       this.object.updateMatrixWorld(true);

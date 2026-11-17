@@ -231,7 +231,7 @@ const BASE_WEAPONS: BaseWeapon[] = [
     material: 'metal',
     preco: 1500,
     durabilidade: null,
-    municao: 8,
+    municao: 30,
     nivelMin: 3,
     blockAbsorb: 0.4,
     blockStability: 0.9,
@@ -249,7 +249,7 @@ const BASE_WEAPONS: BaseWeapon[] = [
     material: 'metal',
     preco: 2200,
     durabilidade: null,
-    municao: 6,
+    municao: 30,
     nivelMin: 6,
     blockAbsorb: 0.4,
     blockStability: 0.9,
@@ -454,12 +454,14 @@ export const DEFAULT_CONSTANTS: CombatConstants = {
   staminaRegenPerTick: 4,
   staminaRegenPerTickBlocking: 0.4,
   walkSpeed: 4,
-  runSpeed: 10,
+  runSpeed: 7,
   // ~3,5 min de corrida com o fôlego cheio.
   runStaminaPerTick: 0.04,
   jumpVelocity: 6.5,
   gravity: 24,
   jumpStaminaCost: 12,
+  aimWalkSpeed: 2.6,
+  jumpCooldownTicks: 60, // 1 s: o pulo dura ~0,55 s
   coyoteTicks: 6,
   // Números iniciais: afinar no lab (cenário com carro e grade).
   traverse: {
@@ -499,10 +501,11 @@ export const DEFAULT_CONSTANTS: CombatConstants = {
   blockStaminaPerDamage: 4,
   guardBreakTicks: 60,
   dodge: {
-    step: { staminaCost: 14, duration: 12, distance: 1.4, iframes: [2, 7] },
-    roll: { staminaCost: 30, duration: 24, distance: 3, iframes: [2, 14] },
+    // Recarga do C: conta do começo da esquiva (passo 0,75 s; rolamento 2 s).
+    step: { staminaCost: 14, duration: 12, distance: 1.4, iframes: [2, 7], cooldownTicks: 45 },
+    roll: { staminaCost: 30, duration: 24, distance: 3, iframes: [2, 14], cooldownTicks: 120 },
     // Rolamento de aterrissagem: grátis e sem i-frames (só não perde o embalo).
-    land: { staminaCost: 0, duration: 20, distance: 2.6, iframes: [0, 0] },
+    land: { staminaCost: 0, duration: 20, distance: 2.6, iframes: [0, 0], cooldownTicks: 0 },
     perfectWindow: 8,
     perfectStaminaRefund: 15,
   },
@@ -523,7 +526,7 @@ export const DEFAULT_CONSTANTS: CombatConstants = {
     gas: { radius: 3.2, ticks: 360, staminaPerTick: 0.4, coughEvery: 90, coughTicks: 36 },
   },
   breath: { delay: 360, perTick: 0.15, cap: 90 },
-  downed: { ticks: 900, hp: 45, crawlSpeed: 0.8, reviveTicks: 150, reviveRange: 1.6, reviveHp: 50, reviveProtection: 90, reviveMoney: 75, combatLockTicks: 300, enemyBlockRange: 6 },
+  downed: { ticks: 900, hp: 45, reviveTicks: 150, reviveRange: 1.6, reviveHp: 50, reviveProtection: 90, reviveMoney: 75, combatLockTicks: 300, enemyBlockRange: 6 },
   knockdownTicks: 45,
   getUpTicks: 20,
   armorDamageMultiplier: 0.75,

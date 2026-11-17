@@ -10,6 +10,7 @@ import {
   matchEquip,
   type MatchResult,
   type MatchState,
+  mapSizeFor,
   type PlayerInput,
   removePlayer,
   type RosterEntry,
@@ -44,7 +45,7 @@ export interface MatchOptions {
   durationTicks?: number;
   /** Bots iniciais por time. Padrão: completa o time da fila rápida (10). */
   bots?: [number, number];
-  /** Máximo de lutadores por time (humanos + bots). */
+  /** Máximo de lutadores por time (humanos + bots). Também escolhe o tamanho do mapa. */
   maxPerTeam?: number;
   /** Fila rápida: quem sai vira bot e quem entra tira um bot. Sala: o líder decide os bots. */
   autoBots?: boolean;
@@ -95,8 +96,8 @@ export class GameMatch {
     private readonly onEnd: (m: GameMatch, result: MatchResult) => void,
     opts: MatchOptions = {},
   ) {
-    this.state = createMatch(id, seed, opts.durationTicks);
     this.maxPerTeam = opts.maxPerTeam ?? MATCH.teamSize;
+    this.state = createMatch(id, seed, opts.durationTicks, 'briga', mapSizeFor(this.maxPerTeam));
     this.autoBots = opts.autoBots ?? true;
     this.roomId = opts.roomId ?? null;
     const bots = opts.bots ?? [MATCH.teamSize, MATCH.teamSize];
@@ -126,7 +127,7 @@ export class GameMatch {
   private addBot(team: TeamSide): void {
     const id = `bot-${team}-${this.botSeq++}`;
     addPlayer(this.state, { id, nick: `Bot ${this.botSeq}`, team, bot: true });
-    const slot = this.botSlot[team]++ % MATCH.teamSize;
+    const slot = this.botSlot[team]++ % this.maxPerTeam;
     this.brains.set(id, createBrain(id, this.seed * 1000 + slot));
   }
 
@@ -176,7 +177,7 @@ export class GameMatch {
     const prev = this.clients.get(c.userId);
     if (prev && prev !== c) prev.close(4010, 'conectado em outro lugar');
     this.clients.set(c.userId, c);
-    c.send({ t: 'welcome', you: c.userId, matchId: this.id, team: c.team, tick: this.state.sim.tick, seed: this.seed });
+    c.send({ t: 'welcome', you: c.userId, matchId: this.id, team: c.team, tick: this.state.sim.tick, seed: this.seed, mapSize: this.state.map.size });
     this.broadcastRoster();
     if (this.state.result) c.send({ t: 'matchEnd', result: this.state.result });
     return true;

@@ -399,6 +399,18 @@ describe('pontos de controle (briga)', () => {
     expect(m.pointScore[0]).toBeGreaterThanOrEqual(3);
   });
 
+  it('dominar os 3 pontos ao mesmo tempo vence na hora, mesmo perdendo no placar', () => {
+    const { m } = atB([{ id: 'a', team: 0 }]);
+    m.score[1] = 50;
+    expect(m.points).toHaveLength(3);
+    for (const p of m.points) if (p.id !== 'B') p.owner = 0;
+    run(m, CONTROL.captureTicks - 1);
+    expect(m.phase).toBe('playing');
+    const ev = run(m, 2);
+    expect(m.phase).toBe('ended');
+    expect(ev.find((e) => e.type === 'matchEnd')).toMatchObject({ result: { winner: 0 } });
+  });
+
   it('bots disputam os pontos (sem humanos, alguém captura em 1 min)', () => {
     const m = createMatch('bots', 11, 60000);
     const brains = [];

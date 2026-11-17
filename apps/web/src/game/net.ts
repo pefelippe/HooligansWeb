@@ -1,4 +1,5 @@
 import {
+  type MapSize,
   type ClientMessage,
   decodeSnapshot,
   type Fighter,
@@ -37,6 +38,8 @@ export interface Welcome {
   matchId: string;
   team: TeamSide;
   seed: number;
+  /** Tamanho do mapa (pelo tamanho da sala): o cliente gera o mesmo mapa pela seed. */
+  mapSize: MapSize;
 }
 
 export interface NetHandlers {

@@ -6,7 +6,7 @@ import { createFighter, createSim, equipItem, type SimEvent, type SimState, spaw
 import { addMoney, ECONOMY } from './combat/economy';
 import { type PerTeam, perTeam, TEAM_COUNT, TEAMS, type TeamSide, TICK_RATE, type Vec2 } from './combat/types';
 import { DEFAULT_COMBAT_DATA } from './combat/weapons';
-import { type ControlPointDef, type GameMap, generateMap, inRect } from './map';
+import { type ControlPointDef, type GameMap, generateMap, inRect, type MapSize } from './map';
 import type { CharacterVisual } from './visual';
 
 // Regras da partida 10×10.
@@ -130,8 +130,8 @@ export function simSedes(map: GameMap): SimState['sedes'] {
   return map.sedes.map((sd) => ({ team: sd.team, pos: sd.spawn, area: sd.area }));
 }
 
-export function createMatch(id: string, seed: number, durationTicks: number = MATCH.durationTicks, mode: MatchMode = 'briga'): MatchState {
-  const map = generateMap(seed);
+export function createMatch(id: string, seed: number, durationTicks: number = MATCH.durationTicks, mode: MatchMode = 'briga', mapSize: MapSize = 'medio'): MatchState {
+  const map = generateMap(seed, mapSize);
   const sim = createSim([], {
     sedes: simSedes(map),
     arenaHalfSize: Math.max(map.halfW, map.halfD),
@@ -313,7 +313,7 @@ export function stepMatch(m: MatchState, inputs: Readonly<Record<string, PlayerI
   }
   if (m.mode === 'bandeirao') stepFlags(m, events);
   else stepPoints(m, events);
-  const won = m.mode === 'bandeirao' && m.captures.some((n) => n >= DEFAULT_COMBAT_DATA.constants.flag.capturesToWin);
+  const won = m.mode === 'bandeirao' ? m.captures.some((n) => n >= DEFAULT_COMBAT_DATA.constants.flag.capturesToWin) : dominator(m) !== null;
   if (won || m.sim.tick >= m.endsAtTick) {
     m.phase = 'ended';
     for (const fl of m.flags) {
@@ -384,10 +384,16 @@ export function computeResult(m: MatchState): MatchResult {
       captures: m.playerCaptures[f.id] ?? 0,
     };
   });
-  // Bandeirão: mais capturas; empate (ou briga) vai pelo placar.
-  const winner = (m.mode === 'bandeirao' ? leader(m.captures) : null) ?? leader(m.score);
+  // Bandeirão: mais capturas; briga: quem dominou os 3 pontos; empate (ou relógio) vai pelo placar.
+  const winner = (m.mode === 'bandeirao' ? leader(m.captures) : dominator(m)) ?? leader(m.score);
   const ranked = [...players].sort((p, q) => q.captures - p.captures || q.kos - p.kos || q.assists - p.assists || p.deaths - q.deaths);
   return { mode: m.mode, winner, score: [...m.score], pointScore: [...m.pointScore], captures: [...m.captures], mvp: ranked[0]?.id ?? null, players };
+}
+
+/** Briga: time dono de todos os pontos de controle ao mesmo tempo (vence na hora), ou null. */
+export function dominator(m: MatchState): TeamSide | null {
+  const owner = m.points[0]?.owner ?? null;
+  return owner !== null && m.points.every((p) => p.owner === owner) ? owner : null;
 }
 
 /** Time com o maior valor, ou null se houver empate no topo. */

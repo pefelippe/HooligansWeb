@@ -1,5 +1,5 @@
 import { type ClientMessage, encodeSnapshot, isTeam, type LobbyClientMessage, type LobbyServerMessage, type MatchResult, type MatchTicketClaims, type RoomTicketClaims, type ServerMessage, type TeamSide } from '@torcidas/shared';
-import { MATCH, PROTOCOL_VERSION, ROOM, TICK_MS, TICK_RATE, validateVisual } from '@torcidas/shared';
+import { isMatchSize, MATCH, PROTOCOL_VERSION, ROOM, TICK_MS, TICK_RATE, validateVisual } from '@torcidas/shared';
 import { jwtVerify, SignJWT } from 'jose';
 import { randomInt, randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage } from 'node:http';
@@ -69,7 +69,7 @@ function signMatchTicket(claims: MatchTicketClaims): Promise<string> {
 const rooms = new RoomManager({
   serverUrl: PUBLIC_URL,
   signMatchTicket,
-  createMatch: (roomId, bots, onEnd) => {
+  createMatch: (roomId, bots, tamanho, onEnd) => {
     const m = new GameMatch(
       randomUUID(),
       randomInt(1, 2 ** 31 - 1),
@@ -77,7 +77,7 @@ const rooms = new RoomManager({
         void reportResult(mm, r);
         onEnd();
       },
-      { roomId, bots, maxPerTeam: ROOM.maxPerTeam, autoBots: false, ...(durationTicks ? { durationTicks } : {}) },
+      { roomId, bots, maxPerTeam: tamanho, autoBots: false, ...(durationTicks ? { durationTicks } : {}) },
     );
     matches.set(m.id, m);
     console.info(`[game] partida de sala ${m.id} (seed ${m.seed})`);
@@ -156,10 +156,10 @@ const http = createServer(async (req, res) => {
     if (req.url === '/internal/rooms' && req.method === 'GET') return json(200, { rooms: rooms.listPublic() });
     const body = (await readJson(req).catch(() => ({}))) as Record<string, unknown>;
     if (req.url === '/internal/rooms' && req.method === 'POST') {
-      const { nome, publica, leaderId } = body;
-      if (typeof nome !== 'string' || typeof leaderId !== 'string') return json(400, { error: 'invalido' });
-      const room = rooms.create(nome, publica === true, leaderId);
-      console.info(`[game] sala ${room.code} criada (${room.publica ? 'pública' : 'privada'})`);
+      const { nome, publica, leaderId, tamanho = ROOM.defaultSize } = body;
+      if (typeof nome !== 'string' || typeof leaderId !== 'string' || !isMatchSize(tamanho)) return json(400, { error: 'invalido' });
+      const room = rooms.create(nome, publica === true, leaderId, tamanho);
+      console.info(`[game] sala ${room.code} criada (${room.publica ? 'pública' : 'privada'}, ${tamanho}×${tamanho})`);
       return json(200, { roomId: room.id, code: room.code });
     }
     if (req.url === '/internal/rooms/check' && req.method === 'POST') {

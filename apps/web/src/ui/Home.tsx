@@ -217,6 +217,12 @@ export function Home({ user, nick, torcida, visual, stats, joining, error, onPla
         <span>
           <Key>X</Key> levanta o parceiro caído
         </span>
+        <span>
+          <Key>Espaço</Key> correndo pula grade e desliza no capô
+        </span>
+        <span>
+          <Key>E</Key> com o rival encostado no carro esmaga
+        </span>
       </footer>
     </main>
   );
