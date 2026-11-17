@@ -1,4 +1,4 @@
-import { type CharacterVisual, levelFromXp, type Torcida, TORCIDAS } from '@torcidas/shared';
+import { type CharacterVisual, levelFromXp, shopItems, type Torcida, TORCIDAS } from '@torcidas/shared';
 import { CharacterPreview } from './CharacterPreview';
 import { Crest, Key, teamGlow } from './kit';
 import { type RoomEntry, Rooms } from './Rooms';
@@ -22,6 +22,9 @@ export function Home({ user, nick, torcida, visual, stats, joining, error, onPla
   const rival = TORCIDAS[torcida.team === 0 ? 1 : 0];
   const s = stats ?? { matches: 0, wins: 0, kos: 0, deaths: 0, assists: 0, xp: 0 };
   const lv = levelFromXp(s.xp);
+  const nextUnlock = shopItems()
+    .filter((i) => i.nivelMin > lv.level)
+    .sort((a, b) => a.nivelMin - b.nivelMin)[0];
   const km = s.deaths > 0 ? (s.kos / s.deaths).toFixed(2) : String(s.kos);
   const [c1, c2] = torcida.cores;
   const glow = teamGlow(torcida);
@@ -66,6 +69,11 @@ export function Home({ user, nick, torcida, visual, stats, joining, error, onPla
                   {lv.into} / {lv.need} XP
                 </small>
               </div>
+              {nextUnlock && (
+                <small className="muted">
+                  Nível {nextUnlock.nivelMin} libera: {nextUnlock.nome}
+                </small>
+              )}
             </div>
           </div>
           <div className="hm-edit">

@@ -9,6 +9,7 @@
     "lint": "eslint src test",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json",
+    "load": "tsx scripts/load.ts",
     "smoke": "tsx scripts/smoke.ts",
     "rooms-smoke": "tsx scripts/rooms-smoke.ts"
   },
