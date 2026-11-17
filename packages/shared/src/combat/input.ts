@@ -16,6 +16,14 @@ export const Buttons = {
   HEAL: 1 << 12,
   /** Troca o alvo do lock-on (roda do mouse). */
   LOCK_NEXT: 1 << 13,
+  /** Bandagem: cura rápida, dá para apertar seguido. */
+  QUICK_HEAL: 1 << 14,
+  /** Arremesso direto (bots). O jogador escolhe na roda e arremessa no clique. */
+  THROW_BOMB: 1 << 15,
+  THROW_GAS: 1 << 16,
+  /** Roda do mouse: próximo / anterior da roda (armas e arremessáveis). */
+  WEAPON_NEXT: 1 << 17,
+  WEAPON_PREV: 1 << 18,
 } as const;
 
 export interface PlayerInput {
@@ -40,5 +48,5 @@ export function sanitizeInput(input: PlayerInput, fallbackAim: number): PlayerIn
     moveX /= len;
     moveZ /= len;
   }
-  return { moveX, moveZ, aim: fin(input.aim, fallbackAim), buttons: (input.buttons | 0) & 0x3fff };
+  return { moveX, moveZ, aim: fin(input.aim, fallbackAim), buttons: (input.buttons | 0) & 0x7ffff };
 }

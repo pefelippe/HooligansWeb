@@ -214,18 +214,6 @@ describe('cura', () => {
     expect(fighter(s, 'a').state).toBe('idle');
   });
 
-  it('carrinho de churrasquinho: cobra, cura e tem recarga', () => {
-    const cart = { x: 0, z: 2, hw: 0.7, hd: 1.1, h: 1.3, kind: 'carrinho' as const, color: '#000' };
-    const { s, data } = duel({ b: FAR, collision: { boxes: [cart], circles: [], halfW: 40, halfD: 40 } });
-    const a = fighter(s, 'a');
-    a.hp = 50;
-    run(s, data, 100, (t) => ({ a: inp(tap(USE, 1, t), FACE_PLUS_Z) }));
-    expect(a.money).toBe(300 - C.cart.cost);
-    expect(a.hp).toBeCloseTo(50 + (C.cart.ticks / C.cart.interval) * C.cart.amount);
-    run(s, data, 3, (t) => ({ a: inp(tap(USE, 102, t), FACE_PLUS_Z) }));
-    expect(a.state).toBe('idle');
-    expect(a.money).toBe(300 - C.cart.cost);
-  });
 
   it('fôlego: só depois de 6 s sem combate e só até 60', () => {
     const { s, data } = duel({ b: FAR });

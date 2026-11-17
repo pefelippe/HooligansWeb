@@ -12,6 +12,7 @@ import {
   enterState,
   generateMap,
   matchBuy,
+  matchEquip,
   MATCH,
   type PlayerInput,
   resolveCircleCollision,
@@ -163,14 +164,28 @@ describe('partida 10×10', () => {
     expect(worst).toBeLessThan(40);
   });
 
-  it('compra na partida só na própria sede', () => {
+  it('compra na partida em qualquer lugar', () => {
     const m = createMatch('t', 1);
     const f = addPlayer(m, { id: 'p', nick: 'p', team: 0, bot: false });
     expect(matchBuy(m, 'p', 'soqueira').ok).toBe(true);
     f.pos = { x: 0, z: 0 };
     f.money = 10_000;
-    expect(matchBuy(m, 'p', 'faca')).toEqual({ ok: false, reason: 'fora_da_sede' });
+    expect(matchBuy(m, 'p', 'faca').ok).toBe(true);
     expect(m.sim.sedes[0]?.pos).toEqual(m.map.sedes[0].spawn);
+  });
+
+  it('roda de itens: pega o que não tem e troca direto para o que tem', () => {
+    const m = createMatch('t', 1);
+    const f = addPlayer(m, { id: 'p', nick: 'p', team: 0, bot: false });
+    expect(matchEquip(m, 'p', 'faca')?.ok).toBe(true);
+    expect(f.weapon).toBe('faca');
+    expect(matchEquip(m, 'p', 'bomba')?.ok).toBe(true);
+    expect(f.inHand).toBe('bomba');
+    // Já tem: só troca, sem comprar de novo.
+    expect(matchEquip(m, 'p', 'punhos')).toBeNull();
+    expect(f.weapon).toBe('punhos');
+    expect(f.inHand).toBeNull();
+    expect(f.bag.map((w) => w.id)).toEqual(['faca']);
   });
 });
 

@@ -6,7 +6,7 @@ import type { CombatConstants, MoveDef, TeamSide, Vec2 } from './types';
 //                          ├─> attack
 //                          ├─> block (os primeiros ticks são a janela de parry)
 //                          └─> dodge (i-frames)
-//                          ├─> shout (grito da torcida) / healing (curativo) / eating (carrinho)
+//                          ├─> shout (grito da torcida) / healing (curativo)
 //                          └─> reviving (levantando aliado caído)
 //   reações: hitstun, blockstun, staggered (levou parry), guardbreak,
 //            knockdown ─> getup (i-frames)
@@ -26,7 +26,6 @@ export type FighterStateName =
   | 'getup'
   | 'shout'
   | 'healing'
-  | 'eating'
   | 'reviving'
   | 'downed'
   | 'ko'
@@ -89,7 +88,6 @@ export interface Fighter {
   buffUntil: number;
   /** Último tick em que deu ou levou dano (fôlego fora de combate). */
   lastCombatTick: number;
-  cartCooldownUntil: number;
   /** Quem derrubou (caído). Recebe o KO se ele sangrar até o fim ou for finalizado. */
   downedBy: string | null;
   /** Aliado que está sendo levantado (estado reviving). */
@@ -103,6 +101,8 @@ export interface Fighter {
   protectedUntil: number;
   weapon: string;
   durability: number | null;
+  /** Armas guardadas (roda do mouse troca). Tem os punhos quando há arma na mão. */
+  bag: { id: string; durability: number | null }[];
   bleeds: Bleed[];
   /** id do atacante -> último tick em que causou dano (anti-gank e assistências). */
   damagedBy: Record<string, number>;
@@ -117,6 +117,27 @@ export interface Fighter {
   streak: number;
   /** Curativos comprados na loja (uso com canalização de 2 s: marco 4). */
   curativos: number;
+  /** Bandagens no bolso e o tick em que a próxima pode ser usada. */
+  bandagens: number;
+  bandagemReadyTick: number;
+  /** Arremessáveis (teclas 6 e 7). */
+  bombas: number;
+  gases: number;
+  throwReadyTick: number;
+  /** Arremessável na mão (roda do mouse escolhe; clique arremessa). null = arma. */
+  inHand: 'bomba' | 'gas' | null;
+  /** Próximo tick em que a arma com cooldown (pistola) pode atacar de novo. */
+  shotReadyTick: number;
+  /** Pontos do colete (0 = sem colete). */
+  colete: number;
+  /** Lento (e sem correr) até este tick: levou golpe. */
+  slowUntil: number;
+  /** Golpes seguidos recebidos (quebra-trava) e o tick do último. */
+  comboHits: number;
+  lastHitTakenTick: number;
+  /** Fúria 0..max e armadura dela até este tick. */
+  fury: number;
+  furyArmorUntil: number;
 }
 
 export function moveTotalFrames(m: MoveDef): number {
@@ -188,7 +209,6 @@ export function timedTransition(f: Fighter, c: CombatConstants): void {
       break;
     case 'shout':
     case 'healing':
-    case 'eating':
       if (f.stateTick >= f.stateDuration) enterState(f, 'idle');
       break;
     case 'knockdown':

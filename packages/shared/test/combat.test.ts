@@ -321,12 +321,13 @@ describe('KO, respawn e economia', () => {
     expect(b.hp).toBe(DEFAULT_CONSTANTS.maxHp);
   });
 
-  it('morrer com arma comprada volta para os punhos', () => {
+  it('arma comprada fica depois do nocaute', () => {
     const { s, data } = duel({ sedes, b: { weapon: 'taco' } });
     fighter(s, 'b').hp = 1;
     const ev = run(s, data, 10, (t) => ({ a: inp(tap(LIGHT, 1, t), FACE_PLUS_Z), b: inp(0, FACE_MINUS_Z) }));
-    expect(ofType(ev, 'weaponDrop')[0]?.weapon).toBe('taco');
-    expect(fighter(s, 'b').weapon).toBe('punhos');
+    expect(ofType(ev, 'ko')).toHaveLength(1);
+    expect(ofType(ev, 'weaponDrop')).toHaveLength(0);
+    expect(fighter(s, 'b').weapon).toBe('taco');
   });
 
   it('proteção de spawn: invulnerável por 3 s, cancelada ao atacar', () => {
@@ -358,30 +359,50 @@ describe('KO, respawn e economia', () => {
 describe('loja', () => {
   const sedes = [{ team: 0 as const, pos: { x: -20, z: 0 } }];
 
-  it('compra negada fora da sede', () => {
-    const { s, data } = duel({ sedes });
-    expect(canBuy(s, fighter(s, 'a'), 'soqueira', data)).toEqual({ ok: false, reason: 'fora_da_sede' });
-  });
-
-  it('compra negada na sede do rival', () => {
+  it('loja grátis e em qualquer lugar (até na sede do rival)', () => {
     const { s, data } = duel({ sedes, b: { pos: { x: -20, z: 0 } } });
-    expect(canBuy(s, fighter(s, 'b'), 'soqueira', data)).toEqual({ ok: false, reason: 'fora_da_sede' });
+    const b = fighter(s, 'b');
+    expect(buy(s, b, 'barra', data).ok).toBe(true);
+    expect(b.weapon).toBe('barra');
+    expect(b.money).toBe(ECONOMY.startMoney);
+    expect(ECONOMY.startMoney).toBe(1000);
   });
 
-  it('compra negada sem saldo', () => {
-    const { s, data } = duel({ sedes, a: { pos: { x: -20, z: 0 } } });
-    expect(buy(s, fighter(s, 'a'), 'barra', data)).toEqual({ ok: false, reason: 'saldo_insuficiente' });
-    expect(fighter(s, 'a').money).toBe(ECONOMY.startMoney);
-    expect(fighter(s, 'a').weapon).toBe('punhos');
+  it('colete segura metade do dano até gastar', () => {
+    const { s, data } = duel();
+    const b = fighter(s, 'b');
+    expect(buy(s, b, 'colete', data).ok).toBe(true);
+    expect(canBuy(s, b, 'colete', data)).toEqual({ ok: false, reason: 'limite' });
+    run(s, data, 12, (t) => ({ a: inp(tap(LIGHT, 1, t), FACE_PLUS_Z), b: inp(0, FACE_MINUS_Z) }));
+    const lost = DEFAULT_CONSTANTS.maxHp - b.hp;
+    expect(lost).toBeGreaterThan(0);
+    expect(DEFAULT_CONSTANTS.colete.hp - b.colete).toBeCloseTo(lost, 5);
   });
 
-  it('compra na sede com saldo troca a arma e debita', () => {
-    const { s, data } = duel({ sedes, a: { pos: { x: -20, z: 0 } } });
+  it('pistola acerta de longe e só atira de novo depois do intervalo', () => {
+    const { s, data } = duel({ a: { weapon: 'pistola' }, b: { pos: { x: 0, z: 12 } } });
+    const b = fighter(s, 'b');
+    const shoot = (t: number) => ({ a: inp(t % 20 === 1 ? LIGHT : 0, FACE_PLUS_Z), b: inp(0, FACE_MINUS_Z) });
+    const cd = data.weapons.pistola?.cooldown ?? 0;
+    // Clicando a cada 20 ticks: só um tiro por intervalo.
+    const ev = run(s, data, cd - 10, shoot);
+    expect(ofType(ev, 'hit')).toHaveLength(1);
+    expect(b.hp).toBeLessThan(DEFAULT_CONSTANTS.maxHp);
+    const ev2 = run(s, data, cd, shoot);
+    expect(ofType(ev2, 'hit')).toHaveLength(1);
+  });
+
+  it('nocauteado compra de qualquer lugar e renasce com a arma; caído não compra', () => {
+    const { s, data } = duel({ sedes });
     const a = fighter(s, 'a');
+    a.state = 'downed';
+    expect(canBuy(s, a, 'soqueira', data)).toEqual({ ok: false, reason: 'morto' });
+    a.state = 'dead';
+    a.money = 500;
     expect(buy(s, a, 'soqueira', data).ok).toBe(true);
     expect(a.weapon).toBe('soqueira');
-    expect(a.money).toBe(ECONOMY.startMoney - (data.weapons.soqueira?.preco ?? 0));
   });
+
 
   it('punhos e caco não são vendidos', () => {
     const { s, data } = duel({ sedes, a: { pos: { x: -20, z: 0 } } });
@@ -439,5 +460,33 @@ describe('correr e pular', () => {
     run(s, data, 5, (t) => ({ a: inp(tap(JUMP, 1, t) | (t === 4 ? DODGE : 0) | (t >= 3 ? BLOCK : 0), FACE_PLUS_Z) }));
     expect(a.state).toBe('idle');
     expect(a.y).toBeGreaterThan(0);
+  });
+});
+
+describe('mochila de armas', () => {
+  const sedes = [{ team: 0 as const, pos: { x: -20, z: 0 } }];
+
+  it('comprar guarda a arma da mão; a roda gira entre elas', () => {
+    const { s, data } = duel({ sedes, a: { pos: { x: -20, z: 0 } } });
+    const a = fighter(s, 'a');
+    a.money = 2000;
+    expect(buy(s, a, 'soqueira', data).ok).toBe(true);
+    expect(buy(s, a, 'faca', data).ok).toBe(true);
+    expect(a.weapon).toBe('faca');
+    expect(a.bag.map((w) => w.id)).toEqual(['punhos', 'soqueira']);
+    expect(buy(s, a, 'soqueira', data)).toEqual({ ok: false, reason: 'ja_possui' });
+    run(s, data, 2, (t) => ({ a: inp(tap(Buttons.WEAPON_NEXT, 1, t)) }));
+    expect(a.weapon).toBe('punhos');
+    run(s, data, 2, (t) => ({ a: inp(tap(Buttons.WEAPON_PREV, s.tick + 1, t)) }));
+    expect(a.weapon).toBe('faca');
+  });
+
+  it('arma que quebra em punhos não duplica os punhos da mochila', () => {
+    const { s, data } = duel({ a: { weapon: 'faca' } });
+    const a = fighter(s, 'a');
+    a.durability = 1;
+    run(s, data, 12, (t) => ({ a: inp(tap(Buttons.LIGHT, 1, t), FACE_PLUS_Z), b: inp(0, FACE_MINUS_Z) }));
+    expect(a.weapon).not.toBe('faca');
+    expect(a.bag.filter((w) => w.id === a.weapon)).toEqual([]);
   });
 });

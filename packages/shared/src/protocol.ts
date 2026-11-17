@@ -1,5 +1,5 @@
 import { type Fighter, type FighterStateName, hasArmor, isInvulnerable } from './combat/fsm';
-import type { SimState } from './combat/sim';
+import type { GasCloud, SimState, Throwable } from './combat/sim';
 import { DEFAULT_COMBAT_DATA } from './combat/weapons';
 import type { PlayerInput } from './combat/input';
 import type { TeamSide, Vec2 } from './combat/types';
@@ -83,6 +83,8 @@ export type ClientMessage =
   | { t: 'hello'; v: number; ticket: string }
   | { t: 'input'; seq: number; input: PlayerInput }
   | { t: 'buy'; item: string }
+  /** Roda de itens: equipa (ou pega na loja e equipa). */
+  | { t: 'equip'; item: string }
   | { t: 'ping'; at: number };
 
 export interface FighterSnapshot {
@@ -101,6 +103,8 @@ export interface FighterSnapshot {
   charge: number;
   weapon: string;
   durability: number | null;
+  /** Ids das armas na mochila, na ordem da roda. */
+  bag: string[];
   /** Proteção de spawn ativa ou i-frames. */
   invulnerable: boolean;
   /** Bloqueio dentro da janela de parry. */
@@ -114,13 +118,22 @@ export interface FighterSnapshot {
   deaths: number;
   assists: number;
   curativos: number;
+  bandagens: number;
+  bombas: number;
+  gases: number;
+  colete: number;
+  inHand: 'bomba' | 'gas' | null;
   koTick: number;
   raca: number;
+  /** Fúria 0..100 (anti-cerco). */
+  fury: number;
+  /** Lento por ter levado golpe (sem correr). */
+  slowed: boolean;
   buffed: boolean;
   /** Janela de contra-golpe aberta. */
   counter: boolean;
   dodgeKind: 'step' | 'roll';
-  /** Progresso 0..1 de canalização (curativo, carrinho, levantando) ou do caído. */
+  /** Progresso 0..1 de canalização (curativo, levantando) ou do caído. */
   channel: number;
 }
 
@@ -151,7 +164,7 @@ export type ServerMessage =
   | { t: 'welcome'; you: string; matchId: string; team: TeamSide; tick: number; seed: number }
   | { t: 'roster'; players: RosterEntry[] }
   /** `self`: estado completo do seu lutador, para a predição reconciliar. */
-  | { t: 'snapshot'; tick: number; ackSeq: number; match: MatchSnapshotInfo; fighters: FighterSnapshot[]; self?: Fighter }
+  | { t: 'snapshot'; tick: number; ackSeq: number; match: MatchSnapshotInfo; fighters: FighterSnapshot[]; self?: Fighter; throws?: Throwable[]; clouds?: GasCloud[] }
   | { t: 'events'; events: MatchEvent[] }
   | { t: 'buyResult'; ok: boolean; item: string; reason?: string }
   | { t: 'matchEnd'; result: MatchResult }
@@ -176,9 +189,10 @@ export function toSnapshot(s: SimState, f: Fighter, data = DEFAULT_COMBAT_DATA):
     charge: f.state === 'charging' ? f.stateTick : round(f.move?.charge ?? 0),
     weapon: f.weapon,
     durability: f.durability,
+    bag: f.bag.map((w) => w.id),
     invulnerable: f.state !== 'ko' && f.state !== 'dead' && isInvulnerable(f, s.tick, c),
     parryLive: f.state === 'block' && f.parryEligible && s.tick - f.blockStartTick <= c.parryWindow,
-    armored: hasArmor(f),
+    armored: hasArmor(f) || s.tick < f.furyArmorUntil,
     bleeding: f.bleeds.length,
     hitstop: f.hitstop,
     lockTarget: f.lockTarget,
@@ -187,13 +201,20 @@ export function toSnapshot(s: SimState, f: Fighter, data = DEFAULT_COMBAT_DATA):
     deaths: f.deaths,
     assists: f.assists,
     curativos: f.curativos,
+    bandagens: f.bandagens,
+    bombas: f.bombas,
+    gases: f.gases,
+    colete: Math.round(f.colete),
+    inHand: f.inHand,
     koTick: f.koTick,
     raca: round(f.raca),
+    fury: round(f.fury),
+    slowed: s.tick < f.slowUntil,
     buffed: s.tick <= f.buffUntil,
     counter: s.tick <= f.counterUntil,
     dodgeKind: f.dodgeKind,
     channel:
-      f.state === 'healing' || f.state === 'eating' || f.state === 'reviving' || f.state === 'downed'
+      f.state === 'healing' || f.state === 'reviving' || f.state === 'downed'
         ? round(Math.min(1, f.stateTick / Math.max(1, f.stateDuration)))
         : 0,
   };

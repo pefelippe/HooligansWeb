@@ -222,6 +222,23 @@ const BASE_WEAPONS: BaseWeapon[] = [
       heavy: heavy({ id: 'barra.h', startup: 22, active: 5, recovery: 30, damage: 32, staminaCost: 32, knockback: 5, guardDamage: 3, armorTicks: 18, hitbox: { shape: 'arc', range: 1.8, halfAngleDeg: 45 } }),
     },
   },
+  {
+    // Tiro em linha reta (clique), com 1 s entre um tiro e outro. Pesado e especial são coronhadas.
+    id: 'pistola',
+    nome: 'Pistola',
+    tipo: 'perfurante',
+    material: 'metal',
+    preco: 800,
+    durabilidade: null,
+    blockAbsorb: 0.4,
+    blockStability: 0.9,
+    cooldown: 60,
+    moves: {
+      // shortcut: o tiro atravessa carro e parede e pega todo mundo na linha; trocar por raycast no mapa se incomodar.
+      light: [light({ id: 'pistola.l1', startup: 6, active: 2, recovery: 12, damage: 30, staminaCost: 4, hitstun: 22, blockstun: 12, knockback: 2.5, hitstop: 4, cancelWindow: null, lunge: 0, hitbox: { shape: 'capsule', from: 0.4, to: 20, radius: 0.5 } })],
+      heavy: heavy({ id: 'pistola.h', damage: 14, hitbox: { shape: 'arc', range: 1.2, halfAngleDeg: 45 } }),
+    },
+  },
 ];
 
 const KICK: MoveDef = {
@@ -281,6 +298,7 @@ const SPECIALS: Record<string, MoveDef> = {
   // Rodada: giro de 360°.
   taco: special({ id: 'taco.esp', startup: 16, active: 8, recovery: 32, damage: 16, knockback: 7, hitbox: { shape: 'arc', range: 2.0, halfAngleDeg: 180 } }),
   // Martelada: não dá para bloquear.
+  pistola: special({ id: 'pistola.esp', startup: 10, damage: 18, knockdown: true, hitbox: { shape: 'arc', range: 1.3, halfAngleDeg: 50 } }),
   barra: special({ id: 'barra.esp', startup: 26, active: 5, recovery: 36, damage: 30, knockback: 5, knockdown: true, unblockable: true, armorTicks: 24, hitbox: { shape: 'arc', range: 2, halfAngleDeg: 35 } }),
 };
 
@@ -362,7 +380,7 @@ export const DEFAULT_CONSTANTS: CombatConstants = {
   staminaRegenPerTick: 4,
   staminaRegenPerTickBlocking: 0.4,
   walkSpeed: 4,
-  runSpeed: 6.8,
+  runSpeed: 10,
   // ~3,5 min de corrida com o fôlego cheio.
   runStaminaPerTick: 0.04,
   jumpVelocity: 6.5,
@@ -395,7 +413,15 @@ export const DEFAULT_CONSTANTS: CombatConstants = {
   shout: { duration: 40, radius: 8, buffTicks: 480, damageBonus: 0.2, staminaRegenMultiplier: 2 },
   headbuttRange: 1.2,
   curativo: { ticks: 120, interval: 30, amount: 15, walkSpeed: 1.2 },
-  cart: { ticks: 90, interval: 30, amount: 15, cost: 50, cooldown: 1200, range: 1.8 },
+  bandagem: { amount: 8, cooldown: 20, start: 3 },
+  colete: { hp: 80, absorb: 0.5 },
+  throwables: {
+    cooldown: 40,
+    range: 10,
+    flightTicks: 36,
+    bomba: { radius: 3.5, knockback: 10 },
+    gas: { radius: 3.2, ticks: 360, staminaPerTick: 0.4, coughEvery: 90, coughTicks: 36 },
+  },
   breath: { delay: 360, perTick: 0.15, cap: 90 },
   downed: { ticks: 900, hp: 45, crawlSpeed: 0.8, reviveTicks: 150, reviveRange: 1.6, reviveHp: 50, reviveProtection: 90, reviveMoney: 75, combatLockTicks: 300, enemyBlockRange: 6 },
   knockdownTicks: 45,
@@ -404,7 +430,10 @@ export const DEFAULT_CONSTANTS: CombatConstants = {
   backstabMinAngleDeg: 120,
   bleed: { duration: 180, interval: 30, damagePerInterval: 1, maxStacks: 5 },
   gankWindow: 90,
-  gankMultipliers: [1, 0.8, 0.62, 0.5, 0.4],
+  gankMultipliers: [1, 0.7, 0.5, 0.35, 0.3],
+  hitSlow: { ticks: 90, speedMultiplier: 0.55 },
+  stunBreak: { hits: 4, window: 45, protectTicks: 30 },
+  fury: { max: 100, perDamage: 1.5, radius: 3.2, knockback: 9, armorTicks: 120, decayDelay: 240, decayPerTick: 0.15 },
   assistWindow: 600,
   koFallTicks: 60,
   // Respawn cresce com a partida: 5 s no começo, 20 s no fim.

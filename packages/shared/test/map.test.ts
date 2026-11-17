@@ -11,7 +11,7 @@ describe('galpões', () => {
       for (const sd of map.sedes) {
         const a = sd.area;
         const intruders = map.boxes.filter(
-          (b) => b.kind !== 'galpao' && b.kind !== 'barraca' && Math.abs(b.x - a.x) < a.hw + b.hw && Math.abs(b.z - a.z) < a.hd + b.hd,
+          (b) => b.kind !== 'galpao' && b.kind !== 'barraca' && b.kind !== 'movel' && Math.abs(b.x - a.x) < a.hw + b.hw && Math.abs(b.z - a.z) < a.hd + b.hd,
         );
         expect(intruders).toEqual([]);
       }

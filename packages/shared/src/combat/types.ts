@@ -84,6 +84,8 @@ export interface WeaponDef {
   blockAbsorb: number;
   /** Divide o dreno de estamina ao bloquear (maior = bloqueia melhor). */
   blockStability: number;
+  /** Ticks mínimos entre um golpe leve e o próximo (pistola). */
+  cooldown?: number;
   moves: {
     light: readonly MoveDef[];
     heavy: MoveDef;
@@ -163,7 +165,18 @@ export interface CombatConstants {
   /** Cabeçada: E perto de inimigo atordoado. */
   headbuttRange: number;
   curativo: { ticks: number; interval: number; amount: number; walkSpeed: number };
-  cart: { ticks: number; interval: number; amount: number; cost: number; cooldown: number; range: number };
+  /** Bandagem: cura instantânea pequena, com recarga curta (spammável). */
+  bandagem: { amount: number; cooldown: number; start: number };
+  /** Colete: segura `absorb` do dano até gastar os `hp` dele. */
+  colete: { hp: number; absorb: number };
+  /** Arremessáveis de controle de grupo: não tiram vida. */
+  throwables: {
+    cooldown: number;
+    range: number;
+    flightTicks: number;
+    bomba: { radius: number; knockback: number };
+    gas: { radius: number; ticks: number; staminaPerTick: number; coughEvery: number; coughTicks: number };
+  };
   /** Fôlego: regenera fora de combate até um teto. */
   breath: { delay: number; perTick: number; cap: number };
   /** Caído: `hp` é a vida de caído (golpes inimigos tiram dela até o KO). */
@@ -193,6 +206,12 @@ export interface CombatConstants {
     damagePerInterval: number;
     maxStacks: number;
   };
+  /** Golpe recebido: fica lento e sem correr por um tempo. */
+  hitSlow: { ticks: number; speedMultiplier: number };
+  /** Quebra-trava: depois de `hits` golpes seguidos (cada um até `window` ticks do anterior), fica intocável até sair do atordoamento + `protectTicks`. */
+  stunBreak: { hits: number; window: number; protectTicks: number };
+  /** Fúria (anti-cerco): enche ao apanhar de 2+ atacantes; cheia, explode derrubando quem está perto e dá armadura. */
+  fury: { max: number; perDamage: number; radius: number; knockback: number; armorTicks: number; decayDelay: number; decayPerTick: number };
   /** Anti-gank: janela em que atacantes distintos contam. */
   gankWindow: number;
   /** Multiplicador por número de atacantes recentes (índice = atacantes - 1). */

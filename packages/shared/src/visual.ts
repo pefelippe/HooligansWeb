@@ -26,7 +26,8 @@ export const VISUAL_OPTIONS = {
     { id: 'loiro', nome: 'Loiro', cor: '#c8a15a' },
     { id: 'ruivo', nome: 'Ruivo', cor: '#8a3b1d' },
     { id: 'grisalho', nome: 'Grisalho', cor: '#9a9a9a' },
-    { id: 'azul', nome: 'Pintado', cor: '#2d5bd8' },
+    { id: 'azul', nome: 'Azul', cor: '#2d5bd8' },
+    { id: 'rosa', nome: 'Rosa', cor: '#e8559a' },
   ],
   barba: [
     { id: 'nenhuma', nome: 'Sem barba' },

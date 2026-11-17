@@ -2,7 +2,7 @@ import { isAlive, isStanding, type Fighter } from './combat/fsm';
 import { dist } from './combat/geometry';
 import type { PlayerInput } from './combat/input';
 import { buy, type BuyResult } from './combat/shop';
-import { createFighter, createSim, type SimEvent, type SimState, spawnPoint, step } from './combat/sim';
+import { createFighter, createSim, equipItem, type SimEvent, type SimState, spawnPoint, step } from './combat/sim';
 import { addMoney, ECONOMY } from './combat/economy';
 import { type TeamSide, TICK_RATE, type Vec2 } from './combat/types';
 import { DEFAULT_COMBAT_DATA } from './combat/weapons';
@@ -188,6 +188,19 @@ export function matchBuy(m: MatchState, id: string, itemId: string): BuyResult |
   const f = m.sim.fighters.find((x) => x.id === id);
   if (!f) return { ok: false, reason: 'jogador_inexistente' };
   return buy(m.sim, f, itemId);
+}
+
+/**
+ * Roda de itens: equipa o que você tem; o que não tem é pego na loja (compra rápida) e já vai para a mão.
+ * Devolve a compra quando houve uma (para o aviso), ou null quando só trocou.
+ */
+export function matchEquip(m: MatchState, id: string, itemId: string): ReturnType<typeof matchBuy> | null {
+  const f = m.sim.fighters.find((x) => x.id === id);
+  if (!f || m.phase !== 'playing' || !isStanding(f)) return null;
+  if (equipItem(f, itemId)) return null;
+  const r = buy(m.sim, f, itemId);
+  if (r.ok) equipItem(f, itemId);
+  return r;
 }
 
 export function ticksLeft(m: MatchState): number {

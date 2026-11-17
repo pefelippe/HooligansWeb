@@ -49,6 +49,28 @@ export interface SimState {
   /** Obstáculos do mapa (opcional: o combat lab roda numa arena vazia). Estático. */
   collision?: Pick<GameMap, 'boxes' | 'circles' | 'halfW' | 'halfD'>;
   rules?: SimRules;
+  /** Bombas e gás em voo (opcional: a predição do cliente não carrega). */
+  throwables?: Throwable[];
+  clouds?: GasCloud[];
+}
+
+export interface Throwable {
+  kind: 'bomba' | 'gas';
+  owner: string;
+  team: TeamSide;
+  from: Vec2;
+  to: Vec2;
+  /** Tick do arremesso e do impacto. */
+  t0: number;
+  t1: number;
+}
+
+export interface GasCloud {
+  x: number;
+  z: number;
+  team: TeamSide;
+  owner: string;
+  until: number;
 }
 
 export type SimEvent =
@@ -74,11 +96,17 @@ export type SimEvent =
   | { type: 'weaponDrop'; tick: number; fighter: string; weapon: string; pos: Vec2 }
   | { type: 'special'; tick: number; fighter: string; move: string }
   | { type: 'shout'; tick: number; fighter: string; buffed: string[] }
-  | { type: 'heal'; tick: number; fighter: string; source: 'curativo' | 'carrinho'; amount: number }
+  | { type: 'heal'; tick: number; fighter: string; source: 'curativo' | 'bandagem'; amount: number }
   | { type: 'downed'; tick: number; target: string; by: string | null }
   | { type: 'revive'; tick: number; target: string; by: string }
   | { type: 'ko'; tick: number; target: string; killer: string | null; assists: string[] }
-  | { type: 'respawn'; tick: number; fighter: string };
+  | { type: 'respawn'; tick: number; fighter: string }
+  | { type: 'stunbreak'; tick: number; fighter: string }
+  | { type: 'fury'; tick: number; fighter: string; hit: string[] }
+  | { type: 'throw'; tick: number; fighter: string; kind: Throwable['kind'] }
+  | { type: 'explosion'; tick: number; fighter: string; pos: Vec2; hit: string[] }
+  | { type: 'gas'; tick: number; fighter: string; pos: Vec2 }
+  | { type: 'vestBreak'; tick: number; fighter: string };
 
 export interface NewFighter {
   id: string;
@@ -119,7 +147,6 @@ export function createFighter(nf: NewFighter, data: CombatData = DEFAULT_COMBAT_
     counterUntil: -1,
     buffUntil: -1,
     lastCombatTick: 0,
-    cartCooldownUntil: 0,
     downedBy: null,
     reviveTarget: null,
     blockStartTick: NEVER,
@@ -129,6 +156,7 @@ export function createFighter(nf: NewFighter, data: CombatData = DEFAULT_COMBAT_
     protectedUntil: 0,
     weapon,
     durability: data.weapons[weapon]?.durabilidade ?? null,
+    bag: weapon === 'punhos' ? [] : [{ id: 'punhos', durability: null }],
     bleeds: [],
     damagedBy: {},
     prevButtons: 0,
@@ -141,6 +169,19 @@ export function createFighter(nf: NewFighter, data: CombatData = DEFAULT_COMBAT_
     assists: 0,
     streak: 0,
     curativos: c.startCurativos,
+    bandagens: c.bandagem.start,
+    bandagemReadyTick: 0,
+    bombas: 0,
+    gases: 0,
+    throwReadyTick: 0,
+    inHand: null,
+    shotReadyTick: 0,
+    colete: 0,
+    slowUntil: 0,
+    comboHits: 0,
+    lastHitTakenTick: NEVER,
+    fury: 0,
+    furyArmorUntil: 0,
   };
 }
 
@@ -194,17 +235,6 @@ function inSedeCore(s: SimState, f: Fighter, data: CombatData): Sede | undefined
   return s.sedes.find((sd) => dist(sd.pos, f.pos) <= (sd.area ? c.sedeCoreRadius : c.sedeRadius));
 }
 
-/** Carrinho de churrasquinho ao alcance (caixas `carrinho` do mapa). */
-export function cartInRange(s: SimState, f: Fighter, data: CombatData = DEFAULT_COMBAT_DATA): boolean {
-  const r = data.constants.cart.range;
-  return !!s.collision?.boxes.some((b) => {
-    if (b.kind !== 'carrinho') return false;
-    const dx = Math.max(Math.abs(f.pos.x - b.x) - b.hw, 0);
-    const dz = Math.max(Math.abs(f.pos.z - b.z) - b.hd, 0);
-    return Math.hypot(dx, dz) <= r;
-  });
-}
-
 /** Aliado caído mais próximo ao alcance para levantar. */
 export function downedAllyInRange(s: SimState, f: Fighter, data: CombatData = DEFAULT_COMBAT_DATA): Fighter | undefined {
   const r = data.constants.downed.reviveRange;
@@ -240,6 +270,7 @@ export function step(s: SimState, inputs: Readonly<Record<string, PlayerInput | 
   for (const f of s.fighters) advance(s, f, data, events);
   for (const f of s.fighters) processInput(s, f, sanitizeInput(inputs[f.id] ?? { ...NEUTRAL_INPUT, aim: f.facing }, f.facing), data, events);
   resolveHits(s, data, events);
+  updateThrowables(s, data, events);
   for (const f of s.fighters) endOfTick(s, f, data, events);
   separate(s, data);
   return events;
@@ -271,7 +302,6 @@ function advance(s: SimState, f: Fighter, data: CombatData, events: SimEvent[]):
   // Cura canalizada em etapas, antes de o estado terminar (assim a última etapa conta).
   // Interrompido por um acerto = fica o que já curou.
   if (f.state === 'healing' && f.stateTick % c.curativo.interval === 0) heal(s, f, c.curativo.amount, 'curativo', data, events);
-  if (f.state === 'eating' && f.stateTick % c.cart.interval === 0) heal(s, f, c.cart.amount, 'carrinho', data, events);
   const wasAttack = f.state === 'attack' ? f.move : null;
   timedTransition(f, c);
   if (wasAttack && f.state !== 'attack' && wasAttack.hitIds.length === 0 && wasAttack.segment === 0) {
@@ -282,7 +312,7 @@ function advance(s: SimState, f: Fighter, data: CombatData, events: SimEvent[]):
   const dt = 1 / TICK_RATE;
   switch (f.state) {
     case 'idle':
-      translate(f, f.moveDir, (f.running ? c.runSpeed : c.walkSpeed) * (f.carrying ? c.flag.carrierSpeed : 1) * dt);
+      translate(f, f.moveDir, (f.running ? c.runSpeed : c.walkSpeed) * (f.carrying ? c.flag.carrierSpeed : 1) * (s.tick < f.slowUntil ? c.hitSlow.speedMultiplier : 1) * dt);
       break;
     case 'block':
       translate(f, f.moveDir, c.blockWalkSpeed * dt);
@@ -327,7 +357,7 @@ function advance(s: SimState, f: Fighter, data: CombatData, events: SimEvent[]):
   f.pos.z = Math.max(-h, Math.min(h, f.pos.z));
 }
 
-function heal(s: SimState, f: Fighter, amount: number, source: 'curativo' | 'carrinho', data: CombatData, events: SimEvent[]): void {
+function heal(s: SimState, f: Fighter, amount: number, source: 'curativo' | 'bandagem', data: CombatData, events: SimEvent[]): void {
   const before = f.hp;
   f.hp = Math.min(data.constants.maxHp, f.hp + amount);
   if (f.hp > before) events.push({ type: 'heal', tick: s.tick, fighter: f.id, source, amount: f.hp - before });
@@ -356,6 +386,7 @@ function respawn(s: SimState, f: Fighter, data: CombatData, events: SimEvent[]):
   f.buffer = null;
   f.downedBy = null;
   f.curativos = Math.max(f.curativos, c.startCurativos);
+  f.bandagens = Math.max(f.bandagens, c.bandagem.start);
   enterState(f, 'idle');
   events.push({ type: 'respawn', tick: s.tick, fighter: f.id });
 }
@@ -375,7 +406,7 @@ const ACTION_BUTTONS: [BufferedAction, number][] = [
 
 function processInput(s: SimState, f: Fighter, input: PlayerInput, data: CombatData, events: SimEvent[]): void {
   const c = data.constants;
-  const pressed = input.buttons & ~f.prevButtons;
+  let pressed = input.buttons & ~f.prevButtons;
   const held = input.buttons;
   f.prevButtons = input.buttons;
   if (!isAlive(f)) {
@@ -390,6 +421,8 @@ function processInput(s: SimState, f: Fighter, input: PlayerInput, data: CombatD
     return;
   }
 
+  // Arremessável na mão: o clique esquerdo arremessa em vez de bater.
+  if (f.inHand && pressed & Buttons.LIGHT) pressed = (pressed & ~Buttons.LIGHT) | (f.inHand === 'bomba' ? Buttons.THROW_BOMB : Buttons.THROW_GAS);
   for (const [action, bit] of ACTION_BUTTONS) {
     if (pressed & bit) {
       f.buffer = { action, tick: s.tick };
@@ -407,9 +440,20 @@ function processInput(s: SimState, f: Fighter, input: PlayerInput, data: CombatD
   const desiredYaw = target && f.lockTarget ? yawTo(f.pos, target.pos) : input.aim;
 
   if (f.hitstop > 0) return;
+  // Bandagem: instantânea, fora da fila de ações (não interrompe andar nem bloquear).
+  if (pressed & Buttons.QUICK_HEAL && isActionable(f) && f.bandagens > 0 && s.tick >= f.bandagemReadyTick && f.hp < c.maxHp) {
+    f.bandagens--;
+    f.bandagemReadyTick = s.tick + c.bandagem.cooldown;
+    heal(s, f, c.bandagem.amount, 'bandagem', data, events);
+  }
+  if (pressed & (Buttons.WEAPON_NEXT | Buttons.WEAPON_PREV) && isActionable(f)) switchWeapon(f, pressed & Buttons.WEAPON_NEXT ? 1 : -1, data);
+  const throwKind = pressed & Buttons.THROW_BOMB ? 'bomba' : pressed & Buttons.THROW_GAS ? 'gas' : null;
+  if (throwKind && isActionable(f) && f.y <= 0 && s.tick >= f.throwReadyTick && (throwKind === 'bomba' ? f.bombas : f.gases) > 0) {
+    throwItem(s, f, throwKind, desiredYaw, data, events);
+  }
   const grounded = f.y <= 0 && f.vy <= 0;
   const moving = Math.hypot(input.moveX, input.moveZ) > 0.1;
-  f.running = f.state === 'idle' && moving && !!(held & Buttons.RUN) && f.stamina >= 1;
+  f.running = f.state === 'idle' && moving && !!(held & Buttons.RUN) && f.stamina >= 1 && s.tick >= f.slowUntil;
 
   switch (f.state) {
     case 'idle':
@@ -422,7 +466,7 @@ function processInput(s: SimState, f: Fighter, input: PlayerInput, data: CombatD
       if (pressed & Buttons.JUMP && grounded && spendStamina(s, f, c.jumpStaminaCost)) {
         f.vy = c.jumpVelocity;
       } else if (pressed & Buttons.USE && grounded && tryUse(s, f, data)) {
-        // levantar aliado ou comer no carrinho
+        // levantar aliado
       } else if (f.buffer && tryStart(s, f, f.buffer.action, data, events)) f.buffer = null;
       else if (held & Buttons.BLOCK && grounded) enterBlock(s, f, data);
       break;
@@ -466,7 +510,8 @@ function processInput(s: SimState, f: Fighter, input: PlayerInput, data: CombatD
       if (!m) break;
       const phase = attackPhase(m.def, f.stateTick);
       // Com alvo travado, o corpo gruda nele no startup e no ativo; sem trava, gira devagar.
-      if (f.lockTarget && phase !== 'recovery') f.facing = desiredYaw;
+      // Arma de tiro (com cooldown) mira na hora, como com alvo travado.
+      if ((f.lockTarget || weaponOf(f, data).cooldown) && phase !== 'recovery') f.facing = desiredYaw;
       else if (f.lockTarget || phase !== 'recovery') f.facing = turnToward(f.facing, desiredYaw, c.attackTurnRate);
       if (f.buffer) {
         const a = f.buffer.action;
@@ -568,7 +613,7 @@ function enterBlock(s: SimState, f: Fighter, data: CombatData): void {
   f.blockStartTick = s.tick;
 }
 
-/** X: levantar aliado caído (prioridade) ou comer no carrinho de churrasquinho. */
+/** X: levantar aliado caído. */
 function tryUse(s: SimState, f: Fighter, data: CombatData): boolean {
   const c = data.constants;
   const ally = s.rules?.downed ? downedAllyInRange(s, f, data) : undefined;
@@ -576,13 +621,6 @@ function tryUse(s: SimState, f: Fighter, data: CombatData): boolean {
     enterState(f, 'reviving', c.downed.reviveTicks);
     f.stateTick = 1;
     f.reviveTarget = ally.id;
-    return true;
-  }
-  if (cartInRange(s, f, data) && s.tick >= f.cartCooldownUntil && f.money >= c.cart.cost && f.hp < c.maxHp) {
-    f.money -= c.cart.cost;
-    f.cartCooldownUntil = s.tick + c.cart.cooldown;
-    enterState(f, 'eating', c.cart.ticks);
-    f.stateTick = 1;
     return true;
   }
   return false;
@@ -598,7 +636,10 @@ function tryStart(s: SimState, f: Fighter, action: BufferedAction, data: CombatD
   switch (action) {
     case 'light': {
       const first = w.moves.light[0];
-      return first ? startAttack(s, f, first, 0, data) : false;
+      if (w.cooldown && s.tick < f.shotReadyTick) return false;
+      const ok = first ? startAttack(s, f, first, 0, data) : false;
+      if (ok && w.cooldown) f.shotReadyTick = s.tick + w.cooldown;
+      return ok;
     }
     case 'heavy': {
       const def = w.moves.heavy;
@@ -796,8 +837,14 @@ function applyHit(s: SimState, { attacker: a, target: t, move: m }: PendingHit, 
 
   const { damage, backstab, counter } = rawDamage(a, t, m, s.tick, data);
   if (counter) a.counterUntil = -1; // o contra-golpe vale um acerto
-  const armored = hasArmor(t);
-  const dealt = armored ? damage * c.armorDamageMultiplier : damage;
+  const armored = hasArmor(t) || s.tick < t.furyArmorUntil;
+  let dealt = armored ? damage * c.armorDamageMultiplier : damage;
+  if (t.colete > 0) {
+    const absorbed = Math.min(t.colete, dealt * c.colete.absorb);
+    t.colete -= absorbed;
+    dealt -= absorbed;
+    if (t.colete <= 0) events.push({ type: 'vestBreak', tick: s.tick, fighter: t.id });
+  }
   t.hp -= dealt;
   t.damagedBy[a.id] = s.tick;
   addRaca(a, dealt * c.raca.perDamageDealt, data);
@@ -817,7 +864,139 @@ function applyHit(s: SimState, { attacker: a, target: t, move: m }: PendingHit, 
   if (def.bleed) for (let i = 0; i < (def.bleedStacks ?? 1); i++) addBleed(t, a.id, data);
   events.push({ type: 'hit', tick: s.tick, attacker: a.id, target: t.id, move: def.id, damage: dealt, backstab, armored, knockdown, counter });
   wearWeapon(s, a, data, events);
-  if (t.hp <= 0) lethal(s, t, a, data, events);
+  if (t.hp <= 0) {
+    lethal(s, t, a, data, events);
+    return;
+  }
+  // Os segmentos de um golpe múltiplo contam como um só para o quebra-trava.
+  afterHitTaken(s, t, a.id, dealt, armored, !def.multiHit || m.segment === 0, data, events);
+}
+
+/** Lentidão, quebra-trava e fúria de quem acabou de apanhar. */
+function afterHitTaken(s: SimState, t: Fighter, attackerId: string, dealt: number, armored: boolean, newHit: boolean, data: CombatData, events: SimEvent[]): void {
+  const c = data.constants;
+  if (!armored) {
+    t.slowUntil = s.tick + c.hitSlow.ticks;
+    t.running = false;
+    if (newHit) t.comboHits = s.tick - t.lastHitTakenTick <= c.stunBreak.window ? t.comboHits + 1 : 1;
+    if (t.comboHits >= c.stunBreak.hits && isStanding(t)) {
+      t.comboHits = 0;
+      t.protectedUntil = Math.max(t.protectedUntil, s.tick + t.stateDuration + c.stunBreak.protectTicks);
+      events.push({ type: 'stunbreak', tick: s.tick, fighter: t.id });
+    }
+  }
+  t.lastHitTakenTick = s.tick;
+  // Fúria só enche no cerco (outro atacante bateu há pouco).
+  if (recentAttackers(t, attackerId, s.tick, data) > 0) t.fury = Math.min(c.fury.max, t.fury + dealt * c.fury.perDamage);
+  if (t.fury >= c.fury.max && isStanding(t)) furyBurst(s, t, data, events);
+}
+
+function furyBurst(s: SimState, t: Fighter, data: CombatData, events: SimEvent[]): void {
+  const c = data.constants;
+  t.fury = 0;
+  t.furyArmorUntil = s.tick + c.fury.armorTicks;
+  t.comboHits = 0;
+  if (t.state === 'hitstun' || t.state === 'staggered' || t.state === 'blockstun') enterState(t, 'idle');
+  const hit: string[] = [];
+  for (const e of s.fighters) {
+    if (e.team === t.team || !isStanding(e) || isInvulnerable(e, s.tick, c)) continue;
+    if (dist(e.pos, t.pos) > c.fury.radius) continue;
+    knockAway(e, t.pos, c.fury.knockback, data);
+    hit.push(e.id);
+  }
+  events.push({ type: 'fury', tick: s.tick, fighter: t.id, hit });
+}
+
+/** Roda: armas que você tem (na ordem da loja) e depois os arremessáveis com estoque. */
+export function wheelOf(f: Fighter, data: CombatData = DEFAULT_COMBAT_DATA): string[] {
+  const owned = new Set([f.weapon, ...f.bag.map((w) => w.id)]);
+  return [...Object.keys(data.weapons).filter((id) => owned.has(id)), ...(f.bombas > 0 ? ['bomba'] : []), ...(f.gases > 0 ? ['gas'] : [])];
+}
+
+/** Gira a roda: arremessável vai para a mão; arma troca de lugar com a da mochila. */
+export function switchWeapon(f: Fighter, dir: 1 | -1, data: CombatData = DEFAULT_COMBAT_DATA): void {
+  const ring = wheelOf(f, data);
+  if (ring.length < 2) return;
+  const next = ring[(ring.indexOf(f.inHand ?? f.weapon) + dir + ring.length) % ring.length];
+  if (next) equipItem(f, next);
+}
+
+/** Vai direto para um item que você tem: arremessável na mão, ou a arma da mochila troca com a da mão. */
+export function equipItem(f: Fighter, id: string): boolean {
+  if (id === 'bomba' || id === 'gas') {
+    if ((id === 'bomba' ? f.bombas : f.gases) <= 0) return false;
+    f.inHand = id;
+    return true;
+  }
+  if (f.weapon === id) {
+    f.inHand = null;
+    return true;
+  }
+  const i = f.bag.findIndex((w) => w.id === id);
+  const w = f.bag[i];
+  if (!w) return false;
+  f.bag[i] = { id: f.weapon, durability: f.durability };
+  f.weapon = w.id;
+  f.durability = w.durability;
+  f.inHand = null;
+  return true;
+}
+
+/** Derruba sem dano, empurrando para longe de `from`. */
+function knockAway(e: Fighter, from: Vec2, force: number, data: CombatData): void {
+  const d = dist(e.pos, from);
+  const nx = d > 1e-6 ? (e.pos.x - from.x) / d : 1;
+  const nz = d > 1e-6 ? (e.pos.z - from.z) / d : 0;
+  e.vel = { x: nx * force, z: nz * force };
+  e.running = false;
+  enterState(e, 'knockdown', data.constants.knockdownTicks);
+}
+
+function throwItem(s: SimState, f: Fighter, kind: Throwable['kind'], yaw: number, data: CombatData, events: SimEvent[]): void {
+  const c = data.constants.throwables;
+  if (kind === 'bomba') f.bombas--;
+  else f.gases--;
+  if (f.inHand === kind && (kind === 'bomba' ? f.bombas : f.gases) === 0) f.inHand = null;
+  f.throwReadyTick = s.tick + c.cooldown;
+  f.protectedUntil = 0; // arremessar cancela a proteção de spawn, como atacar
+  f.facing = yaw;
+  const d = dirFromYaw(yaw);
+  // shortcut: o arremesso passa por cima de tudo (arco alto); trocar por raycast se jogar através de galpão virar problema.
+  const to = { x: f.pos.x + d.x * c.range, z: f.pos.z + d.z * c.range };
+  (s.throwables ??= []).push({ kind, owner: f.id, team: f.team, from: { ...f.pos }, to, t0: s.tick, t1: s.tick + c.flightTicks });
+  events.push({ type: 'throw', tick: s.tick, fighter: f.id, kind });
+}
+
+function updateThrowables(s: SimState, data: CombatData, events: SimEvent[]): void {
+  const c = data.constants;
+  if (s.clouds?.length) s.clouds = s.clouds.filter((g) => g.until > s.tick);
+  if (!s.throwables?.length) return;
+  const landed = s.throwables.filter((p) => s.tick >= p.t1);
+  if (!landed.length) return;
+  s.throwables = s.throwables.filter((p) => s.tick < p.t1);
+  for (const p of landed) {
+    if (p.kind === 'gas') {
+      (s.clouds ??= []).push({ x: p.to.x, z: p.to.z, team: p.team, owner: p.owner, until: s.tick + c.throwables.gas.ticks });
+      events.push({ type: 'gas', tick: s.tick, fighter: p.owner, pos: { ...p.to } });
+      continue;
+    }
+    const hit: string[] = [];
+    for (const e of s.fighters) {
+      // Esquiva na hora certa (i-frames) e a armadura da Fúria seguram a explosão.
+      if (e.team === p.team || !isStanding(e) || isInvulnerable(e, s.tick, c) || s.tick < e.furyArmorUntil) continue;
+      if (dist(e.pos, p.to) > c.throwables.bomba.radius) continue;
+      knockAway(e, p.to, c.throwables.bomba.knockback, data);
+      e.lastCombatTick = s.tick;
+      hit.push(e.id);
+    }
+    events.push({ type: 'explosion', tick: s.tick, fighter: p.owner, pos: { ...p.to }, hit });
+  }
+}
+
+/** Gás: lento, sem correr, perde fôlego e tosse de tempos em tempos. Só pega o time rival. */
+function inGas(s: SimState, f: Fighter, data: CombatData): boolean {
+  const r = data.constants.throwables.gas.radius;
+  return !!s.clouds?.some((g) => g.team !== f.team && Math.hypot(f.pos.x - g.x, f.pos.z - g.z) <= r);
 }
 
 function rawDamage(a: Fighter, t: Fighter, m: ActiveMove, tick: number, data: CombatData): { damage: number; backstab: boolean; counter: boolean } {
@@ -833,14 +1012,19 @@ function rawDamage(a: Fighter, t: Fighter, m: ActiveMove, tick: number, data: Co
   return { damage: dmg * gankMultiplier(t, a.id, tick, data), backstab, counter };
 }
 
-/** Anti-gank leve: quanto mais atacantes distintos recentes, menos dano cada golpe causa. */
-export function gankMultiplier(t: Fighter, attackerId: string, now: number, data: CombatData): number {
-  const c = data.constants;
+/** Outros atacantes (fora este) que bateram em `t` dentro da janela de gank. */
+export function recentAttackers(t: Fighter, attackerId: string, now: number, data: CombatData): number {
   let n = 0;
   for (const [id, tick] of Object.entries(t.damagedBy)) {
-    if (id !== attackerId && now - tick <= c.gankWindow) n++;
+    if (id !== attackerId && now - tick <= data.constants.gankWindow) n++;
   }
-  const mults = c.gankMultipliers;
+  return n;
+}
+
+/** Anti-gank leve: quanto mais atacantes distintos recentes, menos dano cada golpe causa. */
+export function gankMultiplier(t: Fighter, attackerId: string, now: number, data: CombatData): number {
+  const n = recentAttackers(t, attackerId, now, data);
+  const mults = data.constants.gankMultipliers;
   return mults[Math.min(n, mults.length - 1)] ?? 1;
 }
 
@@ -861,8 +1045,11 @@ function wearWeapon(s: SimState, f: Fighter, data: CombatData, events: SimEvent[
   if (f.durability > 0) return;
   const old = weaponOf(f, data);
   const into = old.quebraEm ?? 'punhos';
+  // Se a mochila já tem a arma em que esta vira (os punhos, sempre), tira de lá para não duplicar.
+  const kept = f.bag.find((w) => w.id === into);
+  f.bag = f.bag.filter((w) => w.id !== into);
   f.weapon = into;
-  f.durability = data.weapons[into]?.durabilidade ?? null;
+  f.durability = kept ? kept.durability : (data.weapons[into]?.durabilidade ?? null);
   events.push({ type: 'weaponBreak', tick: s.tick, fighter: f.id, weapon: old.id, into });
 }
 
@@ -900,11 +1087,6 @@ function knockOut(s: SimState, t: Fighter, killer: Fighter | null, data: CombatD
   t.downedBy = null;
   t.buffUntil = -1;
   t.counterUntil = -1;
-  if (t.weapon !== 'punhos') {
-    events.push({ type: 'weaponDrop', tick: s.tick, fighter: t.id, weapon: t.weapon, pos: { ...t.pos } });
-    t.weapon = 'punhos';
-    t.durability = null;
-  }
   const assists: string[] = [];
   for (const [id, tick] of Object.entries(t.damagedBy)) {
     if (id === killer?.id || s.tick - tick > c.assistWindow) continue;
@@ -928,6 +1110,14 @@ function knockOut(s: SimState, t: Fighter, killer: Fighter | null, data: CombatD
 function endOfTick(s: SimState, f: Fighter, data: CombatData, events: SimEvent[]): void {
   const c = data.constants;
   if (!isStanding(f)) return;
+  if (s.clouds?.length && inGas(s, f, data)) {
+    const g = c.throwables.gas;
+    f.slowUntil = Math.max(f.slowUntil, s.tick + 15);
+    f.stamina = Math.max(0, f.stamina - g.staminaPerTick);
+    f.lastStaminaSpendTick = s.tick;
+    // Cada um tosse num tick diferente (pelo último caractere do id), para não ficar sincronizado.
+    if (s.tick % g.coughEvery === f.id.charCodeAt(f.id.length - 1) % g.coughEvery && isActionable(f)) enterState(f, 'staggered', g.coughTicks);
+  }
 
   if (f.bleeds.length > 0) {
     for (const b of f.bleeds) {
@@ -957,6 +1147,8 @@ function endOfTick(s: SimState, f: Fighter, data: CombatData, events: SimEvent[]
   } else if (sede && sede.team === f.team) {
     f.hp = Math.min(c.maxHp, f.hp + c.sedeHealPerTick);
   }
+
+  if (f.fury > 0 && s.tick - f.lastHitTakenTick > c.fury.decayDelay) f.fury = Math.max(0, f.fury - c.fury.decayPerTick);
 
   // Fôlego: fora de combate por um tempo, recupera devagar até o teto.
   if (s.tick - f.lastCombatTick >= c.breath.delay && f.hp < c.breath.cap) {

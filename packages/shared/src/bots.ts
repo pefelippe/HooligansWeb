@@ -1,11 +1,11 @@
-import { attackPhase, isAlive } from './combat/fsm';
+import { attackPhase, type Fighter, isAlive, isStanding } from './combat/fsm';
 import { dist, yawTo } from './combat/geometry';
 import { Buttons, type PlayerInput } from './combat/input';
-import { canBuy, CURATIVO } from './combat/shop';
+import { BANDAGEM, BOMBA, canBuy, CURATIVO, GAS } from './combat/shop';
 import { canRevive, downedAllyInRange, inSede } from './combat/sim';
 import type { Vec2 } from './combat/types';
 import { DEFAULT_COMBAT_DATA } from './combat/weapons';
-import { inRect, MAP_HALF_W } from './map';
+import { inRect, LANES, MAP_HALF_W } from './map';
 import { type ControlPointState, type MatchState, matchBuy } from './match';
 import { nextRandom } from './rng';
 
@@ -70,12 +70,34 @@ export function createBrain(id: string, seed: number): BotBrain {
     seenAttack: '',
     // Papel pela vaga (seed % 10): 5 atacantes, 2 defensores, 3 caçadores, igual nos dois times.
     role: seed % 10 < 5 ? 'atacante' : seed % 10 < 7 ? 'defensor' : 'cacador',
-    lane: [-25, 0, 25][seed % 3] ?? 0,
+    lane: LANES[seed % 3] ?? 0,
     pointPref: Math.floor(seed / 3) % 3,
   };
 }
 
 export function botInput(m: MatchState, brain: BotBrain): PlayerInput {
+  const input = decide(m, brain);
+  // Bandagem no meio da briga: aperta seguido quando a vida cai (soma ao que o resto da IA decidiu).
+  const self = m.sim.fighters.find((f) => f.id === brain.id);
+  if (self && self.hp < 70 && self.bandagens > 0 && m.sim.tick >= self.bandagemReadyTick) input.buttons |= Buttons.QUICK_HEAL;
+  // Procura bolinho a cada 10 ticks (a busca é quadrática no número de lutadores).
+  if (self && m.sim.tick % 10 === 0 && (self.bombas > 0 || self.gases > 0) && isStanding(self) && m.sim.tick >= self.throwReadyTick + 600) throwAtCrowd(m, self, input); // bot espera 10 s entre arremessos
+  return input;
+}
+
+/** Bolinho rival (3+) caindo no alcance do arremesso: joga bomba (ou gás) nele. */
+function throwAtCrowd(m: MatchState, self: Fighter, input: PlayerInput): void {
+  const t = DEFAULT_COMBAT_DATA.constants.throwables;
+  const enemies = m.sim.fighters.filter((f) => f.team !== self.team && isStanding(f));
+  const center = enemies.find(
+    (e) => Math.abs(dist(e.pos, self.pos) - t.range) < 1.5 && enemies.filter((o) => dist(o.pos, e.pos) <= t.bomba.radius).length >= 4,
+  );
+  if (!center) return;
+  input.aim = yawTo(self.pos, center.pos);
+  input.buttons |= self.bombas > 0 ? Buttons.THROW_BOMB : Buttons.THROW_GAS;
+}
+
+function decide(m: MatchState, brain: BotBrain): PlayerInput {
   const s = m.sim;
   const self = s.fighters.find((f) => f.id === brain.id);
   const idle: PlayerInput = { moveX: 0, moveZ: 0, aim: self?.facing ?? 0, buttons: 0 };
@@ -107,6 +129,9 @@ export function botInput(m: MatchState, brain: BotBrain): PlayerInput {
     }
   }
   if (inMySede && self.curativos === 0 && self.money >= CURATIVO.preco + 100) matchBuy(m, self.id, CURATIVO.id);
+  if (inMySede && self.bandagens < BANDAGEM.pacote && self.money >= BANDAGEM.preco + 100) matchBuy(m, self.id, BANDAGEM.id);
+  if (inMySede && self.bombas < 1 && self.money >= BOMBA.preco + 400) matchBuy(m, self.id, BOMBA.id);
+  if (inMySede && self.gases < 1 && self.money >= GAS.preco + 600) matchBuy(m, self.id, GAS.id);
 
   const standingEnemies = s.fighters.filter((f) => f.team !== self.team && isAlive(f) && f.state !== 'downed');
   const nearestEnemyD = Math.min(Infinity, ...standingEnemies.map((f) => dist(f.pos, self.pos)));
@@ -203,7 +228,7 @@ export function botInput(m: MatchState, brain: BotBrain): PlayerInput {
       const homeX = (myTeam === 0 ? -1 : 1) * (MAP_HALF_W - 30);
       const towardHome = myTeam === 0 ? -1 : 1;
       if (towardHome * self.pos.x < towardHome * homeX - 1) {
-        const lane = [-25, 0, 25].reduce((b, l) => (Math.abs(l - self.pos.z) < Math.abs(b - self.pos.z) ? l : b), 0);
+        const lane = LANES.reduce<number>((b, l) => (Math.abs(l - self.pos.z) < Math.abs(b - self.pos.z) ? l : b), 0);
         if (Math.abs(self.pos.z - lane) > 2.5) return go({ x: self.pos.x + towardHome * 2, z: lane });
         return go({ x: homeX, z: lane });
       }
@@ -299,6 +324,24 @@ export function botInput(m: MatchState, brain: BotBrain): PlayerInput {
     return { ...moveTo(rally), aim: yawTo(self.pos, rally), buttons: 0 };
   }
 
+  // Fila de ataque: no máximo BOT_ATTACKERS aliados em cima do mesmo alvo. Sobrou: troca de alvo ou espera em volta.
+  if (target.state !== 'downed' && slotsTaken(s.fighters, self, target) >= BOT_ATTACKERS) {
+    const free = standingEnemies
+      .filter((f) => f.id !== target!.id && dist(f.pos, self.pos) < 14 && slotsTaken(s.fighters, self, f) < BOT_ATTACKERS)
+      .sort((a, b) => dist(a.pos, self.pos) - dist(b.pos, self.pos))[0];
+    if (free) {
+      target = free;
+      brain.targetId = free.id;
+    } else {
+      // Cerca a uns 4 m, de lado, pronto para entrar quando abrir vaga.
+      const away = { x: self.pos.x - target.pos.x, z: self.pos.z - target.pos.z };
+      const len = Math.hypot(away.x, away.z) || 1;
+      const side = brain.aggression > 0.5 ? 1 : -1;
+      const ring = { x: target.pos.x + (away.x / len) * 4 - (away.z / len) * side, z: target.pos.z + (away.z / len) * 4 + (away.x / len) * side };
+      return { ...moveTo(ring), aim: yawTo(self.pos, target.pos), buttons: 0 };
+    }
+  }
+
   const d = dist(self.pos, target.pos);
   const aim = yawTo(self.pos, target.pos);
   const weapon = DEFAULT_COMBAT_DATA.weapons[self.weapon];
@@ -370,6 +413,22 @@ export function botInput(m: MatchState, brain: BotBrain): PlayerInput {
  * Ponto a disputar: o preferido se não for nosso; senão o não-nosso mais perto da preferência; tudo nosso = defende o preferido.
  * A ordem é a partir da própria sede (preferência 0 = o ponto do nosso lado), igual nos dois times.
  */
+/** Quantos bots/aliados podem bater no mesmo alvo ao mesmo tempo. */
+export const BOT_ATTACKERS = 2;
+const ENGAGE_RANGE = 3;
+
+/** Aliados (fora `self`) já engajados em `target`: de pé, a até ENGAGE_RANGE dele e mais perto que `self`. */
+export function slotsTaken(fighters: readonly Fighter[], self: Fighter, target: Fighter): number {
+  const mine = dist(self.pos, target.pos);
+  let n = 0;
+  for (const f of fighters) {
+    if (f === self || f.team !== self.team || !isStanding(f)) continue;
+    const d = dist(f.pos, target.pos);
+    if (d <= ENGAGE_RANGE && d < mine) n++;
+  }
+  return n;
+}
+
 function pointGoal(m: MatchState, team: 0 | 1, pref: number): ControlPointState | undefined {
   const pts = team === 0 ? m.points : [...m.points].reverse();
   const preferred = pts[pref % pts.length];

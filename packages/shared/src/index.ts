@@ -13,5 +13,6 @@ export * from './combat/sim';
 export * from './combat/shop';
 export * from './map';
 export * from './match';
+export * from './xp';
 export * from './bots';
 export * from './net';

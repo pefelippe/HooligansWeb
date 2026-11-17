@@ -1,7 +1,7 @@
 // Economia da partida (estilo CS): dinheiro só vale dentro da partida.
 
 export const ECONOMY = {
-  startMoney: 300,
+  startMoney: 1000,
   hit: 5,
   assist: 50,
   ko: 150,
