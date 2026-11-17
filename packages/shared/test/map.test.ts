@@ -89,3 +89,55 @@ describe('segmentBoxHit (câmera)', () => {
     }
   });
 });
+
+describe('mapa menor (150 × 80 m)', () => {
+  /** Grade de 0,5 m: uma célula é andável se um lutador (r = 0,4) parado nela não é empurrado. */
+  function reachable(map: ReturnType<typeof generateMap>, from: Vec2): (p: Vec2) => boolean {
+    const cell = 0.5;
+    const nx = Math.floor((map.halfW * 2) / cell);
+    const nz = Math.floor((map.halfD * 2) / cell);
+    const idx = (p: Vec2) => Math.floor((p.x + map.halfW) / cell) + Math.floor((p.z + map.halfD) / cell) * nx;
+    const free = (i: number) => {
+      const p = { x: (i % nx) * cell - map.halfW + cell / 2, z: Math.floor(i / nx) * cell - map.halfD + cell / 2 };
+      const q = { ...p };
+      resolveCircleCollision(q, 0.4, map);
+      return Math.hypot(q.x - p.x, q.z - p.z) < 1e-6;
+    };
+    const seen = new Uint8Array(nx * nz);
+    const queue = [idx(from)];
+    seen[queue[0]!] = 1;
+    while (queue.length) {
+      const i = queue.pop()!;
+      const x = i % nx;
+      for (const j of [x > 0 ? i - 1 : -1, x < nx - 1 ? i + 1 : -1, i - nx, i + nx]) {
+        if (j < 0 || j >= nx * nz || seen[j] || !free(j)) continue;
+        seen[j] = 1;
+        queue.push(j);
+      }
+    }
+    return (p) => seen[idx(p)] === 1;
+  }
+
+  it('do spawn de cada time dá para chegar a A, B, C e ao galpão rival', () => {
+    for (const seed of SEEDS.slice(0, 3)) {
+      const map = generateMap(seed);
+      for (const sd of map.sedes) {
+        const ok = reachable(map, sd.spawn);
+        for (const cp of map.controlPoints) expect(ok(cp.pos)).toBe(true);
+        for (const other of map.sedes) expect(ok(other.spawn)).toBe(true);
+      }
+    }
+  });
+
+  it('nenhum obstáculo fora dos limites e as três zonas são diferentes', () => {
+    const map = generateMap(42);
+    for (const b of map.boxes) if (b.kind !== 'grade' && b.kind !== 'muro') {
+      expect(Math.abs(b.x) + b.hw).toBeLessThanOrEqual(map.halfW);
+      expect(Math.abs(b.z) + b.hd).toBeLessThanOrEqual(map.halfD);
+    }
+    const around = (x: number, kind: string) => map.boxes.filter((b) => b.kind === kind && Math.abs(b.x - x) < 14).length;
+    expect(around(-28, 'carro')).toBeGreaterThan(10);
+    expect(around(28, 'barraca')).toBeGreaterThan(10);
+    expect(around(0, 'carro') + around(0, 'barraca')).toBeLessThan(around(-28, 'carro'));
+  });
+});

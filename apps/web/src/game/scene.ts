@@ -31,8 +31,9 @@ export function buildScene(map: GameMap): { scene: THREE.Scene; sun: THREE.Direc
 
   // Asfalto.
   const asphalt = new THREE.Mesh(
-    new THREE.PlaneGeometry(map.halfW * 2 + 40, map.halfD * 2 + 40),
-    new THREE.MeshStandardMaterial({ color: 0xffffff, map: asphaltTexture(map.halfW * 2 + 40, map.halfD * 2 + 40), roughness: 0.95 }),
+    // Vai até o Castelão, que fica atrás da grade norte.
+    new THREE.PlaneGeometry(map.halfW * 2 + 40, (STADIUM.z + STADIUM.rz + 10) * 2),
+    new THREE.MeshStandardMaterial({ color: 0xffffff, map: asphaltTexture(map.halfW * 2 + 40, (STADIUM.z + STADIUM.rz + 10) * 2), roughness: 0.95 }),
   );
   asphalt.rotation.x = -Math.PI / 2;
   asphalt.receiveShadow = true;
@@ -54,19 +55,20 @@ export function buildScene(map: GameMap): { scene: THREE.Scene; sun: THREE.Direc
   const lane = new THREE.Mesh(new THREE.PlaneGeometry(map.halfW * 2 - 56, 0.15), new THREE.MeshBasicMaterial({ color: 0xe0b23a }));
   lane.rotation.x = -Math.PI / 2;
   lane.position.y = 0.012;
-  for (const z of [-5, 5]) {
+  for (const z of [-3.5, 3.5]) {
     const l = lane.clone();
     l.position.z = z;
     world.add(l);
   }
 
   // Esplanada do Castelão (concreto mais claro) e canteiros de grama da avenida.
-  const esplanada = new THREE.Mesh(new THREE.PlaneGeometry(STADIUM.rx * 2 + 16, STADIUM.z - 8.5), std(0x55585e, 0.95, 0));
+  const espW = 30;
+  const esplanada = new THREE.Mesh(new THREE.PlaneGeometry(espW, STADIUM.z - 8.5), std(0x55585e, 0.95, 0));
   esplanada.rotation.x = -Math.PI / 2;
   esplanada.position.set(STADIUM.x, 0.006, (STADIUM.z + 8.5) / 2);
   esplanada.receiveShadow = true;
   world.add(esplanada);
-  for (const z of [-7.5, 7.5]) {
+  for (const z of [-5, 5]) {
     const grass = new THREE.Mesh(new THREE.PlaneGeometry(map.halfW * 2 - 56, 1.8), std(0x2d4a2b, 1, 0));
     grass.rotation.x = -Math.PI / 2;
     grass.position.set(0, 0.008, z);
@@ -120,7 +122,8 @@ export function buildScene(map: GameMap): { scene: THREE.Scene; sun: THREE.Direc
         g.add(barreira(b));
         break;
       case 'barraca':
-        g.add(shopCounter(b));
+        // Balcão da loja (sede) ou barraca de churrasquinho na rua.
+        g.add(b.team === undefined ? quiosque(b) : shopCounter(b));
         break;
       case 'movel':
         g.add(movel(b));
@@ -143,7 +146,7 @@ export function buildScene(map: GameMap): { scene: THREE.Scene; sun: THREE.Direc
   }
   for (const c of map.circles) {
     // Poucas luzes pontuais (custo por pixel): só os postes do miolo da avenida acendem de verdade.
-    if (c.kind === 'poste') world.add(lightPole(c.x, c.z, c.z === 0 && Math.abs(c.x) <= 66));
+    if (c.kind === 'poste') world.add(lightPole(c.x, c.z, c.z === 0 && Math.abs(c.x) <= 40));
     else if (c.kind === 'coqueiro') world.add(coqueiro(c.x, c.z, nextRandom(rng)));
     else {
       const bin = new THREE.Mesh(new THREE.CylinderGeometry(c.r, c.r * 0.9, 1, 12), std(0x2f6b3b, 0.8, 0));

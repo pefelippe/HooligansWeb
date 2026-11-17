@@ -1,19 +1,20 @@
 import type { TeamSide, Vec2 } from './combat/types';
 import { nextRandom } from './rng';
 
-// Mapa: entorno do Castelão, com a sede (galpão) de cada torcida nas pontas.
-// Gerado por seed: cliente e servidor montam o mesmo layout e a mesma colisão.
+// Mapa: estacionamento do Castelão (o estádio fica ao norte, atrás da grade, só de cenário),
+// com a sede (galpão) de cada torcida nas pontas. Gerado por seed: cliente e servidor montam
+// o mesmo layout e a mesma colisão. 150 × 80 m, para 10 contra 10 se encontrarem rápido.
 //
-//   z = +80  ███████████████ grade ████████████████████████████████████████
-//            carros carros   (       CASTELÃO (oval)       )   carros carros
-//            ─ ─ ─ corredor z=30 ─ ─ ─ coqueiros ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
-//   ┌──────┐ carros carros   esplanada: grades de fila + quiosques   carros ┌──────┐
-//   │GALPÃO│====(A)============ avenida (coqueiros) ====(B)=========(C)=====│GALPÃO│
-//   └──────┘ carros carros carros carros carros carros carros carros carros └──────┘
-//            ─ ─ ─ corredor z=-30 ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
-//   z = -80  carros carros carros ──────── grade ──────── carros carros carros
-//          x = -170                                                    x = +170
-// A, B e C são os pontos de controle (praças livres na avenida).
+//   z = +40  ██████████████████ grade (Castelão atrás) ████████████████████
+//            carros carros      bilheteria          barracas barracas
+//   ─ ─ ─ ─ ─ ─ ─ ─ corredor z=22 ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+//   ┌──────┐ carros carros      grades              barracas barracas ┌──────┐
+//   │GALPÃO│=======(A)==========(B)==========(C)=======================│GALPÃO│
+//   └──────┘ carros carros      grades              barracas barracas └──────┘
+//   ─ ─ ─ ─ ─ ─ ─ ─ corredor z=-22 ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+//   z = -40  carros carros carros carros carros carros carros carros
+//          x = -75                                                 x = +75
+// A: estacionamento (carros, cobertura baixa). B: esplanada (aberta). C: barracas (apertado, cheio de quinas).
 
 /** Caixa alinhada aos eixos: centro e meias-medidas (m). */
 export interface Box {
@@ -86,13 +87,14 @@ const TEAM_COLORS: [string, string][] = [
   ['#0033a0', '#e30613'],
 ];
 
-/** Mapa ~3x a área do primeiro (1,7x em cada lado). */
-export const MAP_HALF_W = 170;
-export const MAP_HALF_D = 80;
-/** Castelão: oval ao norte, fora da avenida e dos corredores dos bots. */
-export const STADIUM = { x: 0, z: 56, rx: 78, rz: 22, h: 24 };
-/** Corredores leste-oeste livres de carros: os bots usam para atravessar o mapa. */
-export const LANES = [-30, 0, 30] as const;
+export const MAP_HALF_W = 75;
+export const MAP_HALF_D = 40;
+/** Castelão: oval ao norte, fora da área jogável (só cenário). */
+export const STADIUM = { x: 0, z: 66, rx: 58, rz: 20, h: 24 };
+/** Corredores leste-oeste livres de obstáculo: os bots usam para atravessar o mapa. */
+export const LANES = [-22, 0, 22] as const;
+/** Mapas conhecidos. Por enquanto só o estacionamento; o estádio por dentro vem depois. */
+export type MapId = 'estacionamento';
 /** Raio da praça de um ponto de controle (m). */
 export const CONTROL_POINT_RADIUS = 6;
 
@@ -101,7 +103,7 @@ export const GALPAO = { hw: 12, hd: 10, wall: 0.3, height: 6, frontDoor: 7, side
 
 function galpao(team: TeamSide, boxes: Box[]): SedeDef {
   const side = team === 0 ? -1 : 1;
-  const cx = side * (MAP_HALF_W - GALPAO.hw - 3); // ±85
+  const cx = side * (MAP_HALF_W - GALPAO.hw - 3); // ±60
   const cz = 0;
   const { hw, hd, wall: t, height: h } = GALPAO;
   const [wallColor] = TEAM_COLORS[team] ?? ['#777', '#999'];
@@ -143,7 +145,7 @@ function galpao(team: TeamSide, boxes: Box[]): SedeDef {
   };
 }
 
-export function generateMap(seed: number): GameMap {
+export function generateMap(seed: number, _mapId: MapId = 'estacionamento'): GameMap {
   const rng = { seed };
   const rand = () => nextRandom(rng);
   const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rand() * xs.length)] as T;
@@ -152,90 +154,82 @@ export function generateMap(seed: number): GameMap {
   const spots: Vec2[] = [];
   const W = MAP_HALF_W;
   const D = MAP_HALF_D;
-  const S = STADIUM;
 
   // Limites: grade ao norte e ao sul, muros nas laterais.
   boxes.push({ x: 0, z: D + 0.5, hw: W + 1, hd: 0.5, h: 2.2, kind: 'grade', color: '#5a6068' });
   boxes.push({ x: 0, z: -D - 0.5, hw: W + 1, hd: 0.5, h: 2.2, kind: 'grade', color: '#5a6068' });
   boxes.push({ x: -W - 0.5, z: 0, hw: 0.5, hd: D + 1, h: 2.5, kind: 'muro', color: '#7b7f86' });
   boxes.push({ x: W + 0.5, z: 0, hw: 0.5, hd: D + 1, h: 2.5, kind: 'muro', color: '#7b7f86' });
-  // Castelão: oval. Colisão em fatias de 6 m (o cliente desenha o oval a partir de STADIUM).
-  for (let x = -S.rx + 3; x < S.rx; x += 6) {
-    const hd = S.rz * Math.sqrt(Math.max(0, 1 - (x / S.rx) ** 2));
-    if (hd > 1) boxes.push({ x, z: S.z, hw: 3, hd, h: S.h, kind: 'estadio', color: '#8f969e', hidden: true });
-  }
 
   const sedes: [SedeDef, SedeDef] = [galpao(0, boxes), galpao(1, boxes)];
-  // Pontos de controle: um perto de cada sede e um no meio, todos na avenida.
+  const PX = 28;
   const controlPoints: ControlPointDef[] = [
-    { id: 'A', pos: { x: -W / 2, z: 0 }, radius: CONTROL_POINT_RADIUS },
+    { id: 'A', pos: { x: -PX, z: 0 }, radius: CONTROL_POINT_RADIUS },
     { id: 'B', pos: { x: 0, z: 0 }, radius: CONTROL_POINT_RADIUS },
-    { id: 'C', pos: { x: W / 2, z: 0 }, radius: CONTROL_POINT_RADIUS },
+    { id: 'C', pos: { x: PX, z: 0 }, radius: CONTROL_POINT_RADIUS },
   ];
   /** Nada de obstáculo solto dentro das praças (com folga). */
   const inPlaza = (x: number, z: number, pad = 1.5) => controlPoints.some((cp) => Math.hypot(x - cp.pos.x, z - cp.pos.z) < cp.radius + pad);
-  /** Fim das fileiras de carros: antes da frente dos galpões. */
-  const rowEnd = W - 28;
-  /** Ruas transversais (cortes nas fileiras), em x. */
-  const streets = [-W / 2 - 22, -W / 2 + 22, 0, W / 2 - 22, W / 2 + 22];
-  const onStreet = (x: number) => streets.some((sx) => Math.abs(x - sx) < 4);
+  /** Até onde vão as fileiras: antes da frente dos galpões (x = ±48). */
+  const rowEnd = W - 30;
+  /** Ruas transversais (cortes nas fileiras), em x: dos lados de cada praça e no meio. */
+  const streets = [-PX - 12, -PX + 12, 0, PX - 12, PX + 12];
+  const onStreet = (x: number, pad = 4) => streets.some((sx) => Math.abs(x - sx) < pad);
 
-  // Fileiras de carros (comprimento no eixo Z), com vagas vazias que viram passagens.
-  const CAR_HW = 0.95;
-  const CAR_HD = 2.2;
-  const addRow = (z: number, x0: number, x1: number) => {
-    for (let x = x0; x <= x1; x += 2.7) {
-      if (onStreet(x)) continue;
-      spots.push({ x, z });
-      if (rand() < 0.38) continue;
-      boxes.push({ x: x + (rand() - 0.5) * 0.3, z: z + (rand() - 0.5) * 0.4, hw: CAR_HW, hd: CAR_HD, h: 1.45, kind: 'carro', color: pick(CAR_COLORS) });
-    }
+  // Carros (comprimento no eixo Z); vagas vazias viram passagens.
+  const addCar = (x: number, z: number) => {
+    spots.push({ x, z });
+    if (rand() < 0.35) return;
+    boxes.push({ x: x + (rand() - 0.5) * 0.3, z: z + (rand() - 0.5) * 0.4, hw: 0.95, hd: 2.2, h: 1.45, kind: 'carro', color: pick(CAR_COLORS) });
   };
-  // Sul: estacionamento inteiro. Corredores dos bots (LANES) passam entre as fileiras.
-  for (const z of [-14, -21, -39, -46, -60, -67]) addRow(z, -rowEnd, rowEnd);
-  // Norte: estacionamento só nas laterais do estádio; na frente dele fica a esplanada.
-  for (const z of [14, 21, 39, 46, 60, 67]) {
-    addRow(z, -rowEnd, -(S.rx + 8));
-    addRow(z, S.rx + 8, rowEnd);
-  }
+  const carRow = (x0: number, x1: number, z: number) => {
+    for (let x = x0; x <= x1; x += 2.7) if (!onStreet(x)) addCar(x, z);
+  };
+  // A (oeste) e o sul inteiro: estacionamento.
+  for (const z of [-11, -16]) carRow(-rowEnd, -14, z);
+  for (const z of [-29, -34]) carRow(-rowEnd, rowEnd, z);
+  for (const z of [11, 16, 28, 33]) carRow(-rowEnd, -14, z);
 
-  // Esplanada do Castelão: filas de grades (barreiras de contenção) com aberturas, e quiosques.
-  for (const z of [15, 22]) {
-    for (let x = -60; x < 60; x += 9) {
-      if (onStreet(x + 3)) continue;
-      boxes.push({ x: x + 3, z, hw: 3, hd: 0.12, h: 1.1, kind: 'barreira', color: '#aab2bd' });
-    }
-  }
-  const QUIOSQUE_CORES = ['#e94f37', '#f6c445', '#2a9d8f', '#e76f51', '#3d5a80', '#8ac926'];
-  for (let x = -rowEnd + 10; x <= rowEnd - 10; x += 26) {
-    for (const z of [-9.5, 9.5]) {
-      if (inPlaza(x, 0, 6) || onStreet(x)) continue;
-      boxes.push({ x, z, hw: 1.6, hd: 1.2, h: 2.6, kind: 'quiosque', color: pick(QUIOSQUE_CORES) });
+  // C (leste): barracas de churrasquinho em grade apertada, com becos.
+  const BARRACA_CORES = ['#e94f37', '#f6c445', '#2a9d8f', '#e76f51', '#3d5a80', '#8ac926'];
+  for (const z of [-11, -16, 11, 16, 28, 33]) {
+    for (let x = 16; x <= rowEnd; x += 5) {
+      if (onStreet(x, 2.6) || inPlaza(x, z, 3) || rand() < 0.2) continue;
+      boxes.push({ x, z, hw: 1.4, hd: 1.4, h: 2.4, kind: 'barraca', color: pick(BARRACA_CORES) });
     }
   }
 
-  // Ônibus das torcidas do lado de fora de cada galpão.
-  const busX = W - 20;
-  boxes.push({ x: -busX, z: 45, hw: 1.3, hd: 6, h: 3.4, kind: 'onibus', color: '#f5f5f5' });
-  boxes.push({ x: busX, z: 45, hw: 1.3, hd: 6, h: 3.4, kind: 'onibus', color: '#0033a0' });
-  boxes.push({ x: -busX, z: -45, hw: 1.3, hd: 6, h: 3.4, kind: 'onibus', color: '#222222' });
-  boxes.push({ x: busX, z: -45, hw: 1.3, hd: 6, h: 3.4, kind: 'onibus', color: '#e30613' });
+  // B (centro): esplanada aberta, filas de grades com aberturas e a bilheteria encostada na grade norte.
+  for (const z of [11, 17]) {
+    for (const x of [-7, 7]) boxes.push({ x, z, hw: 2.5, hd: 0.12, h: 1.1, kind: 'barreira', color: '#aab2bd' });
+  }
+  for (const z of [-11, -16]) for (const x of [-7, 7]) boxes.push({ x, z, hw: 2.5, hd: 0.12, h: 1.1, kind: 'barreira', color: '#aab2bd' });
+  const QUIOSQUE_CORES = ['#e94f37', '#f6c445', '#2a9d8f', '#3d5a80'];
+  for (const x of [-9, -4.5, 4.5, 9]) boxes.push({ x, z: 33, hw: 1.6, hd: 1.2, h: 2.6, kind: 'quiosque', color: pick(QUIOSQUE_CORES) });
+  // Quiosques na beira da avenida, entre as praças.
+  for (const x of [-14, 14]) for (const z of [-7, 7]) boxes.push({ x, z, hw: 1.6, hd: 1.2, h: 2.6, kind: 'quiosque', color: pick(QUIOSQUE_CORES) });
 
-  // Avenida: postes a cada 12 m e coqueiros nos canteiros (fora das praças e dos quiosques).
-  for (let x = -(rowEnd - 8); x <= rowEnd - 8; x += 12) if (!inPlaza(x, 0)) circles.push({ x, z: 0, r: 0.25, kind: 'poste' });
-  for (let x = -(rowEnd - 4); x <= rowEnd - 4; x += 13) {
-    for (const z of [-7.5, 7.5]) if (!inPlaza(x, z, 2) && !boxes.some((b) => b.kind === 'quiosque' && Math.abs(b.x - x) < 3.5 && Math.sign(b.z) === Math.sign(z))) circles.push({ x, z, r: 0.35, kind: 'coqueiro' });
+  // Ônibus das torcidas do lado de fora de cada galpão (entre o corredor e a grade).
+  const busX = W - 18;
+  boxes.push({ x: -busX, z: 32, hw: 1.3, hd: 5, h: 3.4, kind: 'onibus', color: '#f5f5f5' });
+  boxes.push({ x: busX, z: 32, hw: 1.3, hd: 5, h: 3.4, kind: 'onibus', color: '#0033a0' });
+  boxes.push({ x: -busX, z: -32, hw: 1.3, hd: 5, h: 3.4, kind: 'onibus', color: '#222222' });
+  boxes.push({ x: busX, z: -32, hw: 1.3, hd: 5, h: 3.4, kind: 'onibus', color: '#e30613' });
+
+  // Avenida: postes e coqueiros nos canteiros (fora das praças e longe das caixas).
+  const nearBox = (x: number, z: number, pad: number) => boxes.some((b) => Math.abs(b.x - x) < b.hw + pad && Math.abs(b.z - z) < b.hd + pad);
+  for (let x = -(rowEnd - 3); x <= rowEnd - 3; x += 12) if (!inPlaza(x, 0)) circles.push({ x, z: 0, r: 0.25, kind: 'poste' });
+  for (let x = -(rowEnd - 3); x <= rowEnd - 3; x += 9) {
+    for (const z of [-5, 5]) if (!inPlaza(x, z, 2) && !nearBox(x, z, 1)) circles.push({ x, z, r: 0.35, kind: 'coqueiro' });
   }
-  // Postes dos estacionamentos (entre fileiras, fora dos corredores).
-  for (let x = -rowEnd + 6; x <= rowEnd - 6; x += 30) {
-    for (const z of [-53, 53, -17.5, 17.5]) if (z < 0 || Math.abs(x) > S.rx + 10) circles.push({ x, z, r: 0.25, kind: 'poste' });
-  }
-  // Coqueiros na frente do estádio, entre as filas e o oval.
-  for (let x = -66; x <= 66; x += 12) circles.push({ x, z: 27, r: 0.35, kind: 'coqueiro' });
-  for (let i = 0; i < 30; i++) {
+  // Coqueiros na esplanada, entre as grades e a bilheteria.
+  for (const x of [-10, -3, 3, 10]) circles.push({ x, z: 26, r: 0.35, kind: 'coqueiro' });
+  // Postes do estacionamento e lixeiras, fora dos corredores.
+  for (let x = -rowEnd + 4; x <= rowEnd - 4; x += 16) circles.push({ x, z: -38, r: 0.25, kind: 'poste' });
+  for (let i = 0; i < 16; i++) {
     const x = (rand() - 0.5) * 2 * (rowEnd - 2);
-    const z = pick([-74, -53, -7.5, 7.5, 53, 74]);
-    if (!inPlaza(x, z) && (Math.abs(z) !== 53 || z < 0 || Math.abs(x) > S.rx + 10)) circles.push({ x, z, r: 0.45, kind: 'lixeira' });
+    const z = pick([-38, -5, 5, 38]);
+    if (!inPlaza(x, z) && !nearBox(x, z, 0.8)) circles.push({ x, z, r: 0.45, kind: 'lixeira' });
   }
 
   return { seed, halfW: W, halfD: D, boxes, circles, sedes, controlPoints, spots };
