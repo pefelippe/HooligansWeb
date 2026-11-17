@@ -1,5 +1,6 @@
 import {
   attackPhase,
+  beardColor,
   type CharacterVisual,
   DEFAULT_COMBAT_DATA,
   type FighterSnapshot,
@@ -21,17 +22,70 @@ import { bodyMaterial, fighterAsset, SkinnedFighter } from './fighterModel';
 // mesmo estado/frame data (fighterAnim.ts); este boneco fica de reserva se o modelo não carregar.
 
 const data = DEFAULT_COMBAT_DATA;
-/** Altura e largura do tronco/ombros por opção do visual. */
-const HEIGHT = { baixo: 0.88, medio: 1, alto: 1.13 } as const;
-/** Grossura dos braços (escala do osso do braço no glTF). */
-const ARMS = { magro: 0.88, normal: 1, forte: 1.18 } as const;
+/**
+ * Corpo pelos sliders do visual (só cosmético, a hitbox não muda). O modelo tem 1,75 m.
+ * Largura: magro 0.84 até gordo e marombado ~1.46. Quem é baixo ganha cabeça maior (cartoon, lê de longe).
+ */
+function bodyShape(v: CharacterVisual) {
+  const peso = v.peso / 100;
+  const musculo = v.musculo / 100;
+  const width = 0.84 + peso * 0.5 + musculo * 0.12;
+  return {
+    scale: v.altura / 175,
+    width,
+    /** Tronco e pernas moldados no shader do glTF (1 = modelo original). */
+    girth: 0.92 + peso * 0.28 + musculo * 0.1,
+    legs: 0.92 + peso * 0.22 + musculo * 0.12,
+    arms: 0.86 + musculo * 0.36 + peso * 0.1,
+    head: 1 + Math.max(0, (170 - v.altura) / 200),
+    /** Barriga a partir de "fortinho" (0 a 1). */
+    belly: Math.max(0, (peso - 0.55) / 0.45),
+    build: { torso: width, shoulder: 0.2 + 0.035 * width, hip: 0.095 },
+  };
+}
 /** Grupo da cabeça e da mão presos aos ossos do glTF (afinado por screenshot). */
-const HEAD_FIT = { offset: new THREE.Vector3(0, 0, 0), scale: 0.9 };
+const HEAD_FIT = { offset: new THREE.Vector3(0, 0, 0), scale: 1 };
+
+/**
+ * Onde fica cada parte do rosto no grupo da cabeça (+Y para cima, +Z para a frente, origem no pescoço):
+ * cabelo, barba e acessórios são montados a partir disto, então servem aos dois bonecos.
+ */
+interface Face {
+  /** Centro e raios do crânio (elipsoide). */
+  c: THREE.Vector3;
+  r: THREE.Vector3;
+  eye: { y: number; z: number };
+  mustache: { y: number; z: number };
+  chin: { y: number; z: number };
+  /** Raios da casca da barba (largura do maxilar, altura, profundidade). */
+  jaw: THREE.Vector3;
+  /** Cabelo raspado e barba já vêm pintados na pele (material do glTF). */
+  painted: boolean;
+}
+// Medido no Superhero_Male (vértices do osso Head, pose de ligação).
+const FACE_GLTF: Face = {
+  c: new THREE.Vector3(0, 0.113, 0.012),
+  r: new THREE.Vector3(0.093, 0.114, 0.102),
+  eye: { y: 0.097, z: 0.1 },
+  mustache: { y: 0.047, z: 0.117 },
+  chin: { y: 0.0, z: 0.1 },
+  jaw: new THREE.Vector3(0.078, 0.07, 0.105),
+  painted: true,
+};
+// Boneco procedural de reserva (crânio de raio 0.11 a 0.11 do pescoço).
+const FACE_PROC: Face = {
+  c: new THREE.Vector3(0, 0.11, 0),
+  r: new THREE.Vector3(0.101, 0.123, 0.11),
+  eye: { y: 0.13, z: 0.095 },
+  mustache: { y: 0.07, z: 0.1 },
+  chin: { y: 0.025, z: 0.088 },
+  jaw: new THREE.Vector3(0.09, 0.075, 0.1),
+  painted: false,
+};
 const HAND_FIT = {
   offset: new THREE.Vector3(-0.08, 0, 0),
   quat: new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(new THREE.Vector3(0, -1, 0), new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, 1))),
 };
-const BUILD = { magro: { torso: 0.84, shoulder: 0.215, hip: 0.09 }, normal: { torso: 1, shoulder: 0.235, hip: 0.095 }, forte: { torso: 1.24, shoulder: 0.262, hip: 0.1 } } as const;
 
 interface Pose {
   hipL: number;
@@ -165,7 +219,7 @@ function joint(r: number, m: THREE.Material): THREE.Mesh {
   return mesh;
 }
 
-const THROW_CLIP = 'Spell_Simple_Shoot';
+const THROW_CLIP = 'OverhandThrow';
 const _gp = new THREE.Vector3();
 const _gq = new THREE.Quaternion();
 const _gs = new THREE.Vector3();
@@ -255,34 +309,48 @@ export class CharacterView {
     const socks = mat(team === 0 ? 0x111111 : 0xe30613);
     const shoes = mat([0xf2f2f2, 0x1a1a1a, 0x2d4a8a, 0xb5352b][(h >> 3) % 4] ?? 0x1a1a1a);
     const hair = mat(visualColor('corCabelo', v.corCabelo));
+    const beard = v.corBarba === 'igual' ? hair : mat(beardColor(v));
     const eyeMat = mat(0x111111);
     const asset = fighterAsset();
+    const shape = bodyShape(v);
     this.jerseyTex = jerseyTexture(t.cores[0], t.cores[1], (h % 98) + 1, nick);
     this.jerseyMat = asset
       ? bodyMaterial(
-          { skin: skin.color, shorts: shorts.color, socks: socks.color, shoes: shoes.color, trim, jersey: this.jerseyTex, sleeve: v.camisa === 'regata' ? 0.21 : 0.36, stripes: v.camisa === 'listrada' },
+          { skin: skin.color, shorts: shorts.color, socks: socks.color, shoes: shoes.color, trim, jersey: this.jerseyTex, sleeve: v.camisa === 'regata' ? 0.21 : 0.36, stripes: v.camisa === 'listrada', hair: hair.color, beardColor: beard.color, beard: v.barba, scalp: v.cabelo === 'careca' ? 'nenhum' : v.cabelo === 'calvo' ? 'coroa' : 'todo', girth: shape.girth, legs: shape.legs, belly: shape.belly },
           TOON_RAMP,
         )
       : new THREE.MeshToonMaterial({ map: this.jerseyTex, gradientMap: TOON_RAMP });
     this.allMats.push(skin, this.shirtMat, this.jerseyMat, trimMat, shorts, socks, shoes, hair, eyeMat);
-    // Altura da opção com um pouco de sorteio por lutador (±4%), para ninguém ficar igual.
-    const scale = HEIGHT[v.altura] * (1 + (((h >> 9) % 9) - 4) * 0.01);
-    const build = BUILD[v.corpo];
+    if (beard !== hair) this.allMats.push(beard);
+    const { scale, build } = shape;
     // Regata: ombro e braço de fora (pele) em vez da manga da camisa.
     const sleeve = v.camisa === 'regata' ? skin : this.shirtMat;
 
     if (asset) {
       this.outlineBase = allied ? OUTLINE_ALLY.color.getHex() : OUTLINE_ENEMY.color.getHex();
       this.outlineMat = outlineMaterial(this.outlineBase);
-      const sk = new SkinnedFighter(asset, this.jerseyMat, hair, eyeMat, this.outlineMat, build.torso);
-      for (const b of ['upperarm_l', 'upperarm_r']) sk.bone(b)?.scale.setScalar(ARMS[v.corpo]);
+      // Tronco, pernas e barriga são moldados no shader do corpo; o boneco em si não alarga
+      // (alargar tudo esticava a cabeça e virava um ovo).
+      const sk = new SkinnedFighter(asset, this.jerseyMat, hair, eyeMat, this.outlineMat, 1);
+      for (const b of ['upperarm_l', 'upperarm_r']) sk.bone(b)?.scale.setScalar(shape.arms);
       this.skinned = sk;
       // Cabeça: o grupo procedural (cabelo, barba, boné) vai preso ao osso, de pé e olhando para +Z.
       sk.mount('Head', this.head, sk.restPos('Head').add(HEAD_FIT.offset), new THREE.Quaternion());
       this.head.scale.setScalar(HEAD_FIT.scale);
-      this.buildHair(v, hair);
-      this.buildBeard(v, hair);
-      this.buildHeadwear(v, trimMat);
+      sk.bone('Head')?.scale.setScalar(shape.head);
+      this.buildHair(v, FACE_GLTF, hair);
+      // Barba pintada no rosto pelo material do corpo; aqui só os volumes.
+      if (v.barba === 'cheia') this.buildBeardVolume(FACE_GLTF, beard, 1);
+      else if (v.barba === 'lenhador') this.buildBeardVolume(FACE_GLTF, beard, 1.45);
+      else if (v.barba === 'bigodao') this.buildMustache(FACE_GLTF, beard, 1.8);
+      this.buildHeadwear(v, FACE_GLTF, trimMat);
+      if (v.acessorio === 'corrente') {
+        const gold = mat(0xd4a017);
+        this.allMats.push(gold);
+        const chain = new THREE.Mesh(new THREE.TorusGeometry(0.085 * build.torso, 0.009, 6, 24), gold);
+        chain.rotation.x = Math.PI / 2 + 0.35;
+        sk.mount('neck_01', chain, sk.restPos('neck_01').add(new THREE.Vector3(0, -0.03, 0.02)), chain.quaternion.clone());
+      }
       // Colete: preso ao peito, aparece quando o lutador tem pontos de colete.
       const vestMat = mat(0x3d4630);
       this.allMats.push(vestMat);
@@ -352,7 +420,7 @@ export class CharacterView {
       // Cabeça.
       this.head.position.y = 0.6;
       // Cabeça um pouco maior que o real: lê melhor de longe (só visual, hitbox não muda).
-      this.head.scale.setScalar(1.12);
+      this.head.scale.setScalar(1.12 * shape.head);
       this.spine.add(this.head);
       const skull = new THREE.Mesh(new THREE.SphereGeometry(0.11, 16, 12), skin);
       skull.scale.set(0.92, 1.12, 1);
@@ -372,9 +440,9 @@ export class CharacterView {
       const eyeR = new THREE.Mesh(eyeG, eyeMat);
       eyeR.position.set(-0.035, 0.13, 0.095);
       this.head.add(skull, nose, earL, earR, eyeL, eyeR);
-      this.buildHair(v, hair);
-      this.buildBeard(v, hair);
-      this.buildHeadwear(v, trimMat);
+      this.buildHair(v, FACE_PROC, hair);
+      this.buildBeard(v, FACE_PROC, beard);
+      this.buildHeadwear(v, FACE_PROC, trimMat);
 
       // Braços. O lado direito do personagem é -X (ele olha para +Z).
       const arm = (side: 1 | -1, sh: THREE.Group, el: THREE.Group) => {
@@ -463,101 +531,299 @@ export class CharacterView {
     this.root.add(this.lockMarker);
   }
 
-  private buildHair(v: CharacterVisual, hair: THREE.Material): void {
-    const cap = (radius: number, cover: number, sy: number) => {
-      const m = new THREE.Mesh(new THREE.SphereGeometry(radius, 16, 8, 0, Math.PI * 2, 0, Math.PI * cover), hair);
-      m.scale.set(0.95, sy, 1.04);
-      m.position.set(0, 0.13, -0.008);
-      m.rotation.x = -0.25;
-      m.castShadow = true;
-      return m;
-    };
+  /** Elipsoide do crânio (raio 1 escalado), cortado de cima até `cover`·π e inclinado (frente sobe). */
+  private shell(f: Face, m: THREE.Material, inflate: number, cover: number, tilt: number): THREE.Mesh {
+    const s = new THREE.Mesh(new THREE.SphereGeometry(1, 20, 12, 0, Math.PI * 2, 0, Math.PI * cover), m);
+    s.scale.copy(f.r).multiplyScalar(inflate);
+    s.position.copy(f.c);
+    s.rotation.x = -tilt;
+    s.castShadow = true;
+    return s;
+  }
+
+  private buildHair(v: CharacterVisual, f: Face, hair: THREE.Material): void {
+    const { c, r } = f;
+    const add = (...o: THREE.Object3D[]) => this.head.add(...o);
     switch (v.cabelo) {
       case 'careca':
         break;
       case 'raspado':
-        this.head.add(cap(0.1115, 0.5, 1.12));
+        if (!f.painted) add(this.shell(f, hair, 1.02, 0.5, 0.35));
         break;
-      case 'curto':
-        this.head.add(cap(0.113, 0.55, 1.1));
+      case 'curto': {
+        add(this.shell(f, hair, 1.05, 0.5, 0.42));
         break;
+      }
+      case 'topete': {
+        add(this.shell(f, hair, 1.05, 0.5, 0.42));
+        // Volume na frente, puxado para cima.
+        const quiff = new THREE.Mesh(new THREE.SphereGeometry(1, 14, 10), hair);
+        quiff.scale.set(r.x * 0.62, r.y * 0.3, r.z * 0.5);
+        quiff.position.set(0, c.y + r.y * 0.72, c.z + r.z * 0.5);
+        quiff.rotation.x = -0.35;
+        quiff.castShadow = true;
+        add(quiff);
+        break;
+      }
       case 'black': {
-        const afro = new THREE.Mesh(new THREE.SphereGeometry(0.165, 16, 12), hair);
-        afro.scale.set(1, 0.85, 0.95);
-        afro.position.set(0, 0.2, -0.03);
+        // Alto e para trás: o rosto continua aparecendo.
+        const afro = new THREE.Mesh(new THREE.SphereGeometry(1, 20, 14), hair);
+        afro.scale.set(r.x * 1.5, r.y * 1.18, r.z * 1.38);
+        afro.position.set(0, c.y + r.y * 0.72, c.z - r.z * 0.3);
         afro.castShadow = true;
-        this.head.add(afro);
+        add(afro);
         break;
       }
       case 'moicano': {
-        this.head.add(cap(0.1115, 0.5, 1.12));
-        const crest = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.08, 0.22), hair);
-        crest.position.set(0, 0.25, -0.01);
-        crest.castShadow = true;
-        this.head.add(crest);
+        if (!f.painted) add(this.shell(f, hair, 1.015, 0.5, 0.35));
+        // Crista: arco de lâminas do topo da testa até a nuca.
+        for (let i = 0; i < 6; i++) {
+          const a = -0.45 + i * 0.36; // ângulo a partir do topo: negativo = testa, positivo = nuca
+          const tall = 0.065 - Math.abs(i - 1.5) * 0.008;
+          const blade = new THREE.Mesh(new THREE.BoxGeometry(0.022, tall, 0.05), hair);
+          blade.position.set(0, c.y + Math.cos(a) * (r.y + tall * 0.35), c.z - Math.sin(a) * (r.z + tall * 0.35));
+          blade.rotation.x = -a;
+          blade.castShadow = true;
+          add(blade);
+        }
+        break;
+      }
+      case 'trancas': {
+        if (!f.painted) add(this.shell(f, hair, 1.01, 0.5, 0.35));
+        // Tranças rente: arcos da testa à nuca.
+        for (const x of [-0.052, -0.026, 0, 0.026, 0.052]) {
+          const k = Math.sqrt(1 - (x / r.x) ** 2);
+          const braid = new THREE.Mesh(new THREE.TorusGeometry(1, 0.11, 6, 24, Math.PI * 0.82), hair);
+          braid.rotation.y = Math.PI / 2;
+          braid.rotation.z = 0.25;
+          braid.scale.set(r.z * k * 1.04, r.y * k * 1.04, 0.09);
+          braid.position.set(x, c.y, c.z);
+          add(braid);
+        }
+        break;
+      }
+      case 'militar':
+        // Raspado nas laterais e um pouco de volume reto no topo.
+        if (!f.painted) add(this.shell(f, hair, 1.01, 0.45, 0.5));
+        add(this.shell(f, hair, 1.04, 0.24, 0.25));
+        break;
+      case 'cacheado': {
+        add(this.shell(f, hair, 1.07, 0.52, 0.4));
+        // Cachos: bolinhas espalhadas pela parte de cima.
+        const curl = new THREE.SphereGeometry(1, 8, 6);
+        for (let i = 0; i < 14; i++) {
+          const a = (i / 14) * Math.PI * 2;
+          const up = 0.35 + 0.35 * ((i * 7) % 3) / 2;
+          const b = new THREE.Mesh(curl, hair);
+          b.scale.setScalar(0.03);
+          b.position.set(c.x + Math.cos(a) * r.x * 1.02 * Math.cos(up), c.y + Math.sin(up) * r.y * 1.04, c.z + Math.sin(a) * r.z * 1.02 * Math.cos(up) - 0.01);
+          add(b);
+        }
+        break;
+      }
+      case 'coque': {
+        add(this.shell(f, hair, 1.04, 0.5, 0.42));
+        const bun = new THREE.Mesh(new THREE.SphereGeometry(0.04, 12, 10), hair);
+        bun.position.set(0, c.y + r.y * 0.95, c.z - r.z * 0.45);
+        bun.castShadow = true;
+        add(bun);
+        break;
+      }
+      case 'dreads': {
+        add(this.shell(f, hair, 1.05, 0.52, 0.4));
+        // Mechas grossas caindo da metade de trás da cabeça.
+        for (let i = 0; i < 9; i++) {
+          const a = Math.PI * (0.1 + (i / 8) * 0.8); // de um lado ao outro, por trás
+          const lock = segment(0.17, 0.014, 0.012, hair);
+          lock.position.set(Math.cos(a) * r.x * 0.95, c.y + r.y * 0.1, c.z - Math.sin(a) * r.z * 0.95);
+          lock.rotation.set(Math.sin(a) * 0.25, 0, -Math.cos(a) * 0.2);
+          add(lock);
+        }
+        break;
+      }
+      case 'longo':
+      case 'mullet': {
+        add(this.shell(f, hair, 1.05, 0.55, 0.4));
+        // Cabelo de trás: placa arredondada até o ombro (longo) ou até a nuca (mullet).
+        const len = v.cabelo === 'longo' ? 0.22 : 0.13;
+        const back = new THREE.Mesh(new THREE.CylinderGeometry(r.x * 1.02, r.x * 1.08, len, 16, 1, false, Math.PI / 2, Math.PI), hair);
+        back.scale.z = 0.75;
+        back.position.set(0, c.y - len / 2 + r.y * 0.2, c.z - 0.01);
+        back.castShadow = true;
+        add(back);
+        break;
+      }
+      case 'calvo': {
+        if (f.painted) break; // pintado na pele pelo material do glTF
+        // Coroa de cabelo em volta da nuca e das orelhas, topo careca.
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(1, 0.1, 8, 24, Math.PI * 1.3), hair);
+        // Arco de 1,3π centrado na nuca (-Z), aberto na testa.
+        ring.rotation.set(Math.PI / 2 - 0.15, 0, Math.PI * 0.85);
+        ring.scale.set(r.x * 0.96, r.z * 0.96, 0.3);
+        ring.position.set(0, c.y - r.y * 0.3, c.z);
+        add(ring);
         break;
       }
       case 'rabo': {
-        this.head.add(cap(0.114, 0.58, 1.1));
-        const tail = segment(0.16, 0.03, 0.018, hair);
-        tail.position.set(0, 0.19, -0.11);
-        tail.rotation.x = -0.5;
-        this.head.add(tail);
+        add(this.shell(f, hair, 1.05, 0.52, 0.4));
+        // Rabo saindo da nuca, caindo para trás, com elástico.
+        const tail = segment(0.13, 0.026, 0.012, hair);
+        tail.position.set(0, c.y + r.y * 0.25, c.z - r.z * 1.0);
+        tail.rotation.x = 0.55;
+        const tie = new THREE.Mesh(new THREE.TorusGeometry(0.026, 0.008, 6, 12), mat(0xc1121f));
+        this.allMats.push(tie.material);
+        tie.position.copy(tail.position);
+        tie.rotation.x = Math.PI / 2 + 0.55;
+        add(tail, tie);
         break;
       }
     }
   }
 
-  private buildBeard(v: CharacterVisual, hair: THREE.Material): void {
-    if (v.barba === 'cavanhaque' || v.barba === 'cheia') {
-      const goatee = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.045, 0.03), hair);
-      goatee.position.set(0, 0.025, 0.088);
-      this.head.add(goatee);
-    }
-    if (v.barba === 'bigode' || v.barba === 'cheia' || v.barba === 'cavanhaque') {
-      const stache = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.014, 0.02), hair);
-      stache.position.set(0, 0.07, 0.1);
-      this.head.add(stache);
-    }
-    if (v.barba === 'cheia') {
-      const beard = new THREE.Mesh(new THREE.SphereGeometry(0.105, 14, 8, 0, Math.PI * 2, Math.PI * 0.55, Math.PI * 0.45), hair);
-      beard.scale.set(0.95, 1.05, 1.02);
-      beard.position.set(0, 0.105, 0.01);
-      this.head.add(beard);
+  /** Volume fechado no queixo/maxilar (por dentro some na cabeça; sem borda cortando o rosto). */
+  private buildBeardVolume(f: Face, hair: THREE.Material, long: number): void {
+    const vol = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), hair);
+    vol.scale.set(0.056 + 0.012 * (long - 1), 0.04 * long, 0.045);
+    vol.position.set(0, f.chin.y + 0.008 - 0.04 * (long - 1), f.chin.z - 0.036);
+    vol.castShadow = true;
+    this.head.add(vol);
+  }
+
+  /** Bigode em duas metades; o bigodão é mais grosso, mais largo e cai nas pontas. */
+  private buildMustache(f: Face, hair: THREE.Material, size: number): void {
+    const big = size > 1;
+    for (const side of [1, -1]) {
+      const half = new THREE.Mesh(new THREE.CapsuleGeometry(0.0055 * size, 0.022 * size, 3, 8), hair);
+      half.rotation.z = Math.PI / 2 + side * (big ? -0.4 : 0.3);
+      half.position.set(side * (big ? 0.027 : 0.017), f.mustache.y - (big ? 0.01 : 0.004), f.mustache.z + (big ? 0.004 : 0));
+      this.head.add(half);
     }
   }
 
-  private buildHeadwear(v: CharacterVisual, trimMat: THREE.Material): void {
+  private buildBeard(v: CharacterVisual, f: Face, hair: THREE.Material): void {
+    const mustache = () => this.buildMustache(f, hair, 1);
+    // Barba: casca do maxilar, da altura da boca para baixo.
+    const jaw = (m: THREE.Material, inflate: number) => {
+      const shell = new THREE.Mesh(new THREE.SphereGeometry(1, 18, 10, 0, Math.PI * 2, Math.PI * 0.5, Math.PI * 0.42), m);
+      shell.scale.set(f.jaw.x * inflate, f.jaw.y * inflate, f.jaw.z * inflate);
+      shell.position.set(0, f.mustache.y + 0.012, f.c.z + 0.006);
+      shell.rotation.x = 0.38; // frente desce: a boca fica de fora
+      this.head.add(shell);
+    };
+    switch (v.barba) {
+      case 'nenhuma':
+        break;
+      case 'rala': {
+        const stubble = (hair as THREE.MeshToonMaterial).clone();
+        stubble.transparent = true;
+        stubble.opacity = 0.45;
+        this.allMats.push(stubble);
+        jaw(stubble, 1.01);
+        break;
+      }
+      case 'bigode':
+        mustache();
+        break;
+      case 'cavanhaque': {
+        mustache();
+        const goatee = new THREE.Mesh(new THREE.SphereGeometry(1, 10, 8), hair);
+        goatee.scale.set(0.015, 0.02, 0.01);
+        goatee.position.set(0, f.chin.y + 0.006, f.chin.z + 0.002);
+        this.head.add(goatee);
+        break;
+      }
+      case 'cheia':
+        mustache();
+        jaw(hair, 1.08);
+        break;
+      case 'bigodao':
+        this.buildMustache(f, hair, 1.8);
+        break;
+      case 'contorno':
+        jaw(hair, 1.02);
+        break;
+      case 'costeleta':
+        for (const side of [1, -1]) {
+          const burn = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.05, 0.03), hair);
+          burn.position.set(side * f.r.x * 0.98, f.eye.y - 0.035, f.c.z - 0.01);
+          this.head.add(burn);
+        }
+        break;
+      case 'curta':
+        mustache();
+        jaw(hair, 1.04);
+        break;
+      case 'lenhador': {
+        mustache();
+        jaw(hair, 1.12);
+        const vol = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 10), hair);
+        vol.scale.set(0.06, 0.07, 0.05);
+        vol.position.set(0, f.chin.y - 0.02, f.chin.z - 0.01);
+        this.head.add(vol);
+        break;
+      }
+    }
+  }
+
+  private buildHeadwear(v: CharacterVisual, f: Face, trimMat: THREE.Material): void {
+    const { c, r } = f;
+    const add = (...o: THREE.Object3D[]) => this.head.add(...o);
     if (v.acessorio === 'bone') {
-      // Boné na cor da torcida, com aba para a frente.
-      const crown = new THREE.Mesh(new THREE.SphereGeometry(0.118, 16, 8, 0, Math.PI * 2, 0, Math.PI * 0.5), this.shirtMat);
-      crown.scale.set(0.97, 0.9, 1.05);
-      crown.position.set(0, 0.15, 0);
-      const brim = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.012, 0.11), trimMat);
-      brim.position.set(0, 0.155, 0.13);
+      // Boné na cor da torcida, aba e botão na cor secundária.
+      const crown = this.shell(f, this.shirtMat, 1.1, 0.5, 0.18);
+      const brimG = new THREE.CylinderGeometry(0.085, 0.085, 0.01, 18, 1, false, -Math.PI / 2, Math.PI);
+      const brim = new THREE.Mesh(brimG, trimMat);
+      brim.scale.set(1, 1, 0.75);
+      brim.position.set(0, c.y + r.y * 0.16, c.z + r.z * 0.98);
       brim.rotation.x = 0.12;
-      crown.castShadow = brim.castShadow = true;
-      this.head.add(crown, brim);
+      const button = new THREE.Mesh(new THREE.SphereGeometry(0.012, 8, 6), trimMat);
+      button.position.set(0, c.y + r.y * 1.1, c.z);
+      brim.castShadow = true;
+      add(crown, brim, button);
+    } else if (v.acessorio === 'touca') {
+      const wool = this.shell(f, this.shirtMat, 1.1, 0.56, 0.12);
+      const fold = new THREE.Mesh(new THREE.TorusGeometry(1, 0.13, 8, 24), trimMat);
+      fold.rotation.x = Math.PI / 2 - 0.12;
+      fold.scale.set(r.x * 1.03, r.z * 1.05, 0.12);
+      fold.position.set(0, c.y + r.y * 0.12, c.z);
+      add(wool, fold);
     } else if (v.acessorio === 'bandana') {
       const cloth = mat(0xc1121f);
       this.allMats.push(cloth);
-      const band = new THREE.Mesh(new THREE.TorusGeometry(0.104, 0.018, 6, 20), cloth);
-      band.rotation.x = Math.PI / 2 - 0.2;
-      band.scale.set(0.95, 1.04, 1);
-      band.position.set(0, 0.175, 0);
-      this.head.add(band);
-    } else if (v.acessorio === 'oculos') {
-      const glass = mat(0x0b0b0b);
-      this.allMats.push(glass);
-      const lensG = new THREE.BoxGeometry(0.042, 0.026, 0.012);
+      // Faixa na testa, mais alta na frente; nó atrás com as pontas.
+      const k = 0.88;
+      const band = new THREE.Mesh(new THREE.TorusGeometry(1, 0.16, 8, 28), cloth);
+      band.rotation.x = Math.PI / 2 - 0.3;
+      band.scale.set(r.x * k * 1.06, r.z * k * 1.06, 0.1);
+      band.position.set(0, c.y + r.y * 0.4, c.z);
+      const knot = new THREE.Mesh(new THREE.SphereGeometry(0.014, 8, 6), cloth);
+      knot.position.set(0, c.y + r.y * 0.15, c.z - r.z * 0.98);
+      add(band, knot);
       for (const side of [1, -1]) {
-        const lens = new THREE.Mesh(lensG, glass);
-        lens.position.set(side * 0.036, 0.13, 0.104);
-        this.head.add(lens);
+        const end = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.05, 0.006), cloth);
+        end.position.set(side * 0.012, knot.position.y - 0.03, knot.position.z - 0.006);
+        end.rotation.z = side * 0.3;
+        add(end);
       }
-      const bridge = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.006, 0.008), glass);
-      bridge.position.set(0, 0.135, 0.106);
-      this.head.add(bridge);
+    } else if (v.acessorio === 'oculos') {
+      const frame = mat(0x0b0b0b);
+      this.allMats.push(frame);
+      const lensG = new THREE.BoxGeometry(0.038, 0.022, 0.008);
+      const z = f.eye.z + 0.008;
+      for (const side of [1, -1]) {
+        const lens = new THREE.Mesh(lensG, frame);
+        lens.position.set(side * 0.033, f.eye.y, z);
+        // Haste até a orelha.
+        const arm = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.005, 0.09), frame);
+        arm.position.set(side * r.x * 0.93, f.eye.y + 0.004, z - 0.05);
+        const hinge = new THREE.Mesh(new THREE.BoxGeometry(r.x * 0.93 - 0.05, 0.005, 0.005), frame);
+        hinge.position.set(side * (0.05 + r.x * 0.93) / 2, f.eye.y + 0.006, z - 0.004);
+        add(hinge);
+        add(lens, arm);
+      }
+      const bridge = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.005, 0.006), frame);
+      bridge.position.set(0, f.eye.y + 0.006, z);
+      add(bridge);
     }
   }
 
@@ -688,8 +954,8 @@ export class CharacterView {
       p.pelvisY += Math.sin(this.breath) * 0.008;
     }
 
-    // No ar (pulo): pernas recolhidas, braços para cima.
-    if (f.y > 0.02 && f.state === 'idle') {
+    // No ar (pulo): pernas recolhidas, braços para cima. Em cima do carro é chão.
+    if (f.airborne && f.state === 'idle') {
       p.hipL = -0.9;
       p.hipR = -0.3;
       p.kneeL = 1.4;
@@ -1090,7 +1356,7 @@ export class CharacterView {
     this.yawG.rotation.y = this.visYaw;
     // Anel no chão: com Euler XYZ, +Y local aponta para dirFromYaw(facing) quando z = facing + PI.
     this.guard.rotation.set(-Math.PI / 2, 0, f.facing + Math.PI);
-    this.guard.position.y = 0.04 - f.y;
+    this.guard.position.y = 0.04 - (f.airborne ? f.y : 0);
     this.setWeapon(f.inHand ?? f.weapon);
     this.vest.visible = f.colete > 0;
     this.breath += dt * 2.2;
@@ -1168,7 +1434,7 @@ export class CharacterView {
     for (const o of this.outlines) o.visible = !f.invulnerable;
     this.aura.visible = f.buffed && f.state !== 'ko' && f.state !== 'dead';
     if (this.aura.visible) this.aura.material.opacity = 0.3 + Math.sin(this.breath * 3) * 0.15;
-    this.aura.position.y = 0.03 - f.y;
+    this.aura.position.y = 0.03 - (f.airborne ? f.y : 0);
     for (const m of this.allMats) {
       if (m.userData.baseOpacity === undefined) m.userData.baseOpacity = m.opacity;
       const base = m.userData.baseOpacity as number;

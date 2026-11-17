@@ -128,7 +128,8 @@ export class GameEngine {
   inputEnabled = true;
   private readonly cleanup: (() => void)[] = [];
   /** Estado anterior de cada lutador, para disparar sons de assobio, passos, pulo e aterrissagem. */
-  private readonly prev = new Map<string, { move: string | null; stateTick: number; y: number; step: number; state: string }>();
+  private camY = 0;
+  private readonly prev = new Map<string, { move: string | null; stateTick: number; y: number; air: boolean; step: number; state: string }>();
   private meNow: FighterSnapshot | null = null;
   // Predição do próprio lutador.
   private predictor: Predictor | null = null;
@@ -159,7 +160,7 @@ export class GameEngine {
   ) {
     void loadFighterModel();
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-    this.renderer.setPixelRatio(Math.min(QUALITY_LEVELS[0].pixelRatio, window.devicePixelRatio));
+    this.renderer.setPixelRatio(QUALITY_LEVELS[0].pixelRatio);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.conn = new GameConnection(url, ticket, {
@@ -437,6 +438,21 @@ export class GameEngine {
         case 'stunbreak':
           if (e.fighter === you) feed('Escapou da trava: intocável por um instante', true);
           break;
+        case 'splat': {
+          // Esmagado contra o carro: lata amassando.
+          const mine = e.fighter === you || e.attacker === you;
+          this.damageFx(e.fighter, DEFAULT_COMBAT_DATA.constants.splat.damage, e.fighter === you ? 'taken' : mine ? 'crit' : 'other', mine);
+          this.sparkFx(e.fighter, '#ffb020', 20, mine);
+          if (!mine) break;
+          this.sfxAt('heavyHit', posOf(e.fighter), 'metal');
+          this.shake = Math.max(this.shake, 0.35);
+          if (e.attacker === you) feed('ESMAGOU NO CARRO!', true);
+          break;
+        }
+        case 'fall':
+          this.damageFx(e.fighter, e.damage, e.fighter === you ? 'taken' : 'other', e.fighter === you);
+          if (e.fighter === you) this.sfxAt('land', posOf(e.fighter), undefined, 1.2);
+          break;
         case 'weaponBreak':
           if (e.fighter !== you) break;
           playSound('weaponBreak');
@@ -479,7 +495,7 @@ export class GameEngine {
   /** Sons que saem do estado (sem evento): assobio do golpe, passos, pulo, aterrissagem. */
   private stateSounds(f: FighterSnapshot, walked: number): void {
     if (f.id !== this.welcome?.you) return; // só os seus passos, assobios e pulos
-    const p = this.prev.get(f.id) ?? { move: null, stateTick: 0, y: 0, step: 0, state: f.state };
+    const p = this.prev.get(f.id) ?? { move: null, stateTick: 0, y: f.y, air: false, step: 0, state: f.state };
     if (f.state === 'attack' && f.move && (f.move !== p.move || f.stateTick < p.stateTick)) {
       const def = DEFAULT_COMBAT_DATA.weapons[f.weapon];
       const big = f.move.endsWith('.h') || f.move.endsWith('.esp') || def?.id === 'taco' || def?.id === 'barra';
@@ -490,20 +506,21 @@ export class GameEngine {
     if (shot && f.stateTick > shot.startup && p.stateTick <= shot.startup) {
       const range = shot.hitbox.shape === 'capsule' ? shot.hitbox.to : 20;
       const dir = dirFromYaw(f.facing);
-      const free = this.map ? segmentBoxHit(this.map.boxes, { x: f.pos.x, y: 1.35, z: f.pos.z }, { x: f.pos.x + dir.x * range, y: 1.35, z: f.pos.z + dir.z * range }) : 1;
+      const free = this.map ? segmentBoxHit(this.map.boxes, { x: f.pos.x, y: f.y + 1.35, z: f.pos.z }, { x: f.pos.x + dir.x * range, y: f.y + 1.35, z: f.pos.z + dir.z * range }) : 1;
       this.throwFx?.shot(f.pos, f.facing, range * free);
       this.sfxAt('guardbreak', f.pos, undefined, 1.2);
     }
-    if (f.y > 0.05 && p.y <= 0.05) this.sfxAt('jump', f.pos, undefined, 0.7);
-    if (f.y <= 0.01 && p.y > 0.3) this.sfxAt('land', f.pos, undefined, 0.8);
+    if (f.airborne && !p.air && f.y > p.y) this.sfxAt('jump', f.pos, undefined, 0.7);
+    if (!f.airborne && p.air) this.sfxAt('land', f.pos, undefined, 0.8);
+    if (f.state === 'traverse' && p.state !== 'traverse') this.sfxAt('jump', f.pos, undefined, 0.6);
     // Um passo a cada 0,8 m andando (passada maior correndo).
     let step = p.step + walked;
     const stride = f.running ? 1.2 : 0.8;
-    if (f.y <= 0.01 && step >= stride) {
+    if (!f.airborne && step >= stride) {
       step = 0;
       this.sfxAt('step', f.pos, undefined, f.running ? 0.6 : 0.35);
     }
-    this.prev.set(f.id, { move: f.state === 'attack' ? f.move : null, stateTick: f.stateTick, y: f.y, step, state: f.state });
+    this.prev.set(f.id, { move: f.state === 'attack' ? f.move : null, stateTick: f.stateTick, y: f.y, air: f.airborne, step, state: f.state });
   }
 
   private contextHints(me: FighterSnapshot | null, fighters: FighterSnapshot[], points: MatchSnapshotInfo['points'] = []): { prompts: string[]; warnings: string[] } {
@@ -902,7 +919,7 @@ export class GameEngine {
     this.quality = next;
     if (!changed) return;
     const q = QUALITY_LEVELS[next.level]!;
-    this.renderer.setPixelRatio(Math.min(q.pixelRatio, window.devicePixelRatio));
+    this.renderer.setPixelRatio(q.pixelRatio);
     this.resize();
     if (this.sun) this.sun.castShadow = q.shadows;
   }
@@ -1005,12 +1022,14 @@ export class GameEngine {
       const viewYaw = this.yaw + (this.keys.has('KeyV') ? Math.PI : 0);
       const fwd = dirFromYaw(viewYaw);
       const right = dirFromYaw(viewYaw - Math.PI / 2);
-      const pivot = new THREE.Vector3(me.pos.x + right.x * SHOULDER, 1.65, me.pos.z + right.z * SHOULDER);
+      // A altura acompanha o pé (teto do carro, pulo), suavizada para não trepidar.
+      this.camY += (me.y - this.camY) * Math.min(1, dt * 7);
+      const pivot = new THREE.Vector3(me.pos.x + right.x * SHOULDER, 1.65 + this.camY, me.pos.z + right.z * SHOULDER);
       const horiz = Math.cos(this.pitch) * CAM_DIST;
       const cam = new THREE.Vector3(pivot.x - fwd.x * horiz, pivot.y + Math.sin(this.pitch) * CAM_DIST, pivot.z - fwd.z * horiz);
       cam.x = Math.max(-this.map.halfW + 0.3, Math.min(this.map.halfW - 0.3, cam.x));
       cam.z = Math.max(-this.map.halfD + 0.3, Math.min(this.map.halfD - 0.3, cam.z));
-      cam.y = Math.max(0.4, cam.y);
+      cam.y = Math.max(0.4 + this.camY, cam.y);
       // Não atravessa paredes: puxa a câmera para antes do primeiro obstáculo entre ela e o jogador.
       const hit = segmentBoxHit(this.map.boxes, pivot, cam);
       if (hit < 1) {

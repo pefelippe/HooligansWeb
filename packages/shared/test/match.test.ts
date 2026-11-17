@@ -431,3 +431,24 @@ describe('facções', () => {
     for (const bad of [-1, 2, 0.5, '0', null, undefined]) expect(isTeam(bad)).toBe(false);
   });
 });
+
+describe('bots e travessias', () => {
+  it('bot com o rival do outro lado da grade pula por cima em vez de travar', () => {
+    const m = createMatch('t', 5);
+    addPlayer(m, { id: 'bot', nick: 'bot', team: 0, bot: true });
+    addPlayer(m, { id: 'alvo', nick: 'alvo', team: 1, bot: true });
+    const brain = createBrain('bot', 1);
+    const [bot, alvo] = m.sim.fighters;
+    if (!bot || !alvo) throw new Error('sem lutadores');
+    // Grade da esplanada em (7, 11): bot ao sul, rival parado ao norte.
+    bot.pos = { x: 7, z: 9.9 };
+    alvo.pos = { x: 7, z: 12.6 };
+    bot.protectedUntil = alvo.protectedUntil = 0;
+    let vaulted = false;
+    for (let i = 0; i < 180 && !vaulted; i++) {
+      stepMatch(m, { bot: botInput(m, brain), alvo: { moveX: 0, moveZ: 0, aim: Math.PI, buttons: 0 } });
+      vaulted = bot.state === 'traverse';
+    }
+    expect(vaulted).toBe(true);
+  });
+});

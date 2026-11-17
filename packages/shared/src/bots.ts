@@ -1,11 +1,11 @@
-import { attackPhase, type Fighter, isAlive, isStanding } from './combat/fsm';
+import { attackPhase, type Fighter, isAirborne, isAlive, isStanding } from './combat/fsm';
 import { dist, yawTo } from './combat/geometry';
 import { Buttons, type PlayerInput } from './combat/input';
 import { BANDAGEM, BOMBA, canBuy, CURATIVO, GAS } from './combat/shop';
 import { canRevive, downedAllyInRange, inSede } from './combat/sim';
 import type { TeamSide, Vec2 } from './combat/types';
 import { DEFAULT_COMBAT_DATA } from './combat/weapons';
-import { inRect, LANES, MAP_HALF_W } from './map';
+import { findTraverse, inRect, LANES, MAP_HALF_W } from './map';
 import { type ControlPointState, type MatchState, matchBuy } from './match';
 import { nextRandom } from './rng';
 
@@ -80,6 +80,13 @@ export function botInput(m: MatchState, brain: BotBrain): PlayerInput {
   // Bandagem no meio da briga: aperta seguido quando a vida cai (soma ao que o resto da IA decidiu).
   const self = m.sim.fighters.find((f) => f.id === brain.id);
   if (self && self.hp < 70 && self.bandagens > 0 && m.sim.tick >= self.bandagemReadyTick) input.buttons |= Buttons.QUICK_HEAL;
+  // Encostado numa grade ou carro no caminho: pula por cima / desliza no capô (subir no teto, não).
+  if (self && brain.stuckTicks >= 4 && self.state === 'idle' && !isAirborne(self) && (input.moveX || input.moveZ)) {
+    const len = Math.hypot(input.moveX, input.moveZ);
+    const c = DEFAULT_COMBAT_DATA.constants;
+    const plan = findTraverse(m.sim.collision ?? m.map, self.pos, self.y, { x: input.moveX / len, z: input.moveZ / len }, c.hurtRadius, !!(input.buttons & Buttons.RUN), c.traverse);
+    if (plan && plan.kind !== 'subir') input.buttons |= Buttons.JUMP;
+  }
   // Procura bolinho a cada 10 ticks (a busca é quadrática no número de lutadores).
   if (self && m.sim.tick % 10 === 0 && (self.bombas > 0 || self.gases > 0) && isStanding(self) && m.sim.tick >= self.throwReadyTick + 600) throwAtCrowd(m, self, input); // bot espera 10 s entre arremessos
   return input;

@@ -376,7 +376,8 @@ const SHOVE: MoveDef = {
   hitbox: { shape: 'capsule', from: 0.1, to: 0.9, radius: 0.35 },
   hitstun: 14,
   blockstun: 0,
-  knockback: 5,
+  // Forte o bastante para esmagar contra o carro (splat) a até ~0,8 m da lataria.
+  knockback: 8,
   hitstop: 4,
   cancelWindow: null,
   canChainInto: [],
@@ -385,10 +386,62 @@ const SHOVE: MoveDef = {
   breaksGuard: true,
 };
 
+/** Pisão: chute/pesado caindo do alto (de cima do carro). Segura no ar e explode na aterrissagem. */
+const PISAO: MoveDef = {
+  id: 'pisao',
+  kind: 'context',
+  startup: 6,
+  active: 4,
+  recovery: 22,
+  damage: 18,
+  staminaCost: 16,
+  hitbox: { shape: 'arc', range: 1.6, halfAngleDeg: 180 },
+  hitstun: 0,
+  blockstun: 20,
+  knockback: 6,
+  hitstop: 7,
+  cancelWindow: null,
+  canChainInto: [],
+  armorTicks: 0,
+  lunge: 0,
+  knockdown: true,
+  guardDamage: 2.5,
+  plunge: true,
+  // A carga vira o bônus da altura da queda (até +50%).
+  chargeDamageBonus: 0.5,
+};
+
+/** Carrinho: Q correndo. Baixo, derruba, e o corpo rente ao chão passa por baixo de golpe alto. */
+const CARRINHO: MoveDef = {
+  id: 'carrinho',
+  kind: 'kick',
+  startup: 8,
+  active: 12,
+  recovery: 24,
+  damage: 10,
+  staminaCost: 22,
+  hitbox: { shape: 'capsule', from: 0.2, to: 1.1, radius: 0.35 },
+  hitstun: 0,
+  blockstun: 16,
+  knockback: 4,
+  hitstop: 5,
+  cancelWindow: null,
+  canChainInto: [],
+  armorTicks: 0,
+  lunge: 1.2,
+  knockdown: true,
+  low: true,
+  lowProfile: [4, 20],
+};
+
+/** Armas longas alcançam quem está em cima do carro. */
+const LONG_REACH = new Set(['taco', 'barra', 'cassetete']);
+
 const WEAPON_LIST: WeaponDef[] = BASE_WEAPONS.map((w) => {
   const sp = SPECIALS[w.id];
   if (!sp) throw new Error(`arma ${w.id} sem especial`);
-  return { ...w, moves: { ...w.moves, special: sp } };
+  const reach = (m: MoveDef): MoveDef => (LONG_REACH.has(w.id) ? { ...m, vReach: 1.6 } : m);
+  return { ...w, moves: { light: w.moves.light.map(reach), heavy: reach(w.moves.heavy), special: reach(sp) } };
 });
 
 export const DEFAULT_CONSTANTS: CombatConstants = {
@@ -407,6 +460,30 @@ export const DEFAULT_CONSTANTS: CombatConstants = {
   jumpVelocity: 6.5,
   gravity: 24,
   jumpStaminaCost: 12,
+  coyoteTicks: 6,
+  // Números iniciais: afinar no lab (cenário com carro e grade).
+  traverse: {
+    probe: 1.0,
+    vaultMaxHeight: 1.2,
+    vaultMaxDepth: 0.8,
+    vaultTicks: 20,
+    vaultRunTicks: 16,
+    hoodMaxDepth: 2.2,
+    hoodTicks: 22,
+    climbBaseTicks: 18,
+    climbTicksPerMeter: 10,
+    airMantleReach: 0.9,
+    airMantleTicks: 12,
+    cost: 12,
+    carrierTicksMultiplier: 1.5,
+  },
+  landing: { rollMinFall: 1.5, lagMinFall: 1.5, lagSlowTicks: 20 },
+  fall: { minHeight: 1.2, damage: 5 },
+  vReachUp: 0.9,
+  vReachDown: 1.0,
+  magnet: { range: 2.6, coneDeg: 35, maxExtraLunge: 0.8 },
+  splat: { minSpeed: 2.5, damage: 6, stunTicks: 35 },
+  plunge: { minHeight: 1.0, bonusPerMeter: 0.25 },
   kickMaxTargetHeight: 0.35,
   blockWalkSpeed: 1.5,
   chargeWalkSpeed: 1.2,
@@ -424,6 +501,8 @@ export const DEFAULT_CONSTANTS: CombatConstants = {
   dodge: {
     step: { staminaCost: 14, duration: 12, distance: 1.4, iframes: [2, 7] },
     roll: { staminaCost: 30, duration: 24, distance: 3, iframes: [2, 14] },
+    // Rolamento de aterrissagem: grátis e sem i-frames (só não perde o embalo).
+    land: { staminaCost: 0, duration: 20, distance: 2.6, iframes: [0, 0] },
     perfectWindow: 8,
     perfectStaminaRefund: 15,
   },
@@ -480,7 +559,7 @@ export function createCombatData(): CombatData {
   return structuredClone({
     constants: DEFAULT_CONSTANTS,
     weapons: Object.fromEntries(WEAPON_LIST.map((w) => [w.id, w])),
-    common: { kick: KICK, shove: SHOVE, voadora: VOADORA, cabecada: CABECADA },
+    common: { kick: KICK, shove: SHOVE, voadora: VOADORA, cabecada: CABECADA, pisao: PISAO, carrinho: CARRINHO },
   });
 }
 

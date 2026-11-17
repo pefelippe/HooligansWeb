@@ -58,6 +58,8 @@ const FIGHTER_FIELDS: readonly (readonly [keyof FighterSnapshot, FieldType])[] =
   ['buffed', 'bool'],
   ['counter', 'bool'],
   ['dodgeKind', 'str'],
+  ['airborne', 'bool'],
+  ['traverse', 'str?'],
   ['channel', 'f32'],
 ];
 

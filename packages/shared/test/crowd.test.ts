@@ -145,12 +145,12 @@ describe('carros', () => {
     expect(fighter(s, 'a').pos.z).toBeLessThan(car.z - car.hd);
   });
 
-  it('pulando também não sobe no carro', () => {
+  it('Espaço encostado no carro sobe nele (e fica em cima)', () => {
     const { s, data } = duel({ b: { pos: { x: 30, z: 0 } }, collision });
     const a = fighter(s, 'a');
     a.pos.z = 1.1;
-    run(s, data, 90, (t) => ({ a: inp(tap(Buttons.JUMP, 1, t), FACE_PLUS_Z, 0, 1) }));
-    expect(a.pos.z).toBeLessThan(car.z - car.hd);
-    expect(a.y).toBe(0);
+    run(s, data, 90, (t) => ({ a: inp(tap(Buttons.JUMP, 1, t), FACE_PLUS_Z, 0, t === 1 ? 1 : 0) }));
+    expect(a.y).toBeCloseTo(car.h);
+    expect(Math.abs(a.pos.z - car.z)).toBeLessThan(car.hd);
   });
 });

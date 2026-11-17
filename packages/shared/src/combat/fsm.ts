@@ -1,4 +1,4 @@
-import type { CombatConstants, MoveDef, TeamSide, Vec2 } from './types';
+import type { CombatConstants, MoveDef, TeamSide, Vec2, Vec3 } from './types';
 
 // Máquina de estados do lutador.
 //
@@ -7,7 +7,8 @@ import type { CombatConstants, MoveDef, TeamSide, Vec2 } from './types';
 //                          ├─> block (os primeiros ticks são a janela de parry)
 //                          └─> dodge (i-frames)
 //                          ├─> shout (grito da torcida) / healing (curativo)
-//                          └─> reviving (levantando aliado caído)
+//                          ├─> reviving (levantando aliado caído)
+//                          └─> traverse (pular grade, deslizar no capô, subir no carro)
 //   reações: hitstun, blockstun, staggered (levou parry), guardbreak,
 //            knockdown ─> getup (i-frames)
 //   fim:     [downed (caído, pode ser levantado)] ─> ko ─> dead ─> (respawn na sede) ─> idle
@@ -27,11 +28,12 @@ export type FighterStateName =
   | 'shout'
   | 'healing'
   | 'reviving'
+  | 'traverse'
   | 'downed'
   | 'ko'
   | 'dead';
 
-export type BufferedAction = 'light' | 'heavy' | 'dodge' | 'shove' | 'kick' | 'special' | 'shout' | 'heal';
+export type BufferedAction = 'light' | 'heavy' | 'dodge' | 'jump' | 'shove' | 'kick' | 'special' | 'shout' | 'heal';
 
 export interface ActiveMove {
   def: MoveDef;
@@ -45,6 +47,21 @@ export interface ActiveMove {
   dodgedIds: string[];
   /** Segmento atual de um golpe multiHit. */
   segment: number;
+  /** Magnetismo: inimigo para onde o golpe gira (sem lock-on) e o avanço extra até ele (m). */
+  magnet: string | null;
+  extraLunge: number;
+}
+
+export type TraverseKind = 'pular' | 'capo' | 'subir';
+
+/** Travessia em curso: roteirizada de `from` a `to` (validada na entrada), passando por cima de `top`. */
+export interface Traverse {
+  kind: TraverseKind;
+  from: Vec3;
+  to: Vec3;
+  top: number;
+  /** Golpe apertado no meio do pulo/capô: sai voadora na saída. */
+  strike: boolean;
 }
 
 export interface Bleed {
@@ -58,9 +75,16 @@ export interface Fighter {
   /** Nível da conta: só a loja olha. */
   level: number;
   pos: Vec2;
-  /** Altura do pé em relação ao chão (pulo) e velocidade vertical. */
+  /** Altura do pé (absoluta, m) e velocidade vertical. */
   y: number;
   vy: number;
+  /** Altura do chão debaixo do pé (teto do carro, 0 no asfalto). */
+  ground: number;
+  /** Último tick com o pé no chão (coyote time). */
+  groundedTick: number;
+  /** Maior altura desde que saiu do chão (queda: rolamento, dano, pisão). */
+  fallFrom: number;
+  traverse: Traverse | null;
   running: boolean;
   /** Carregando o bandeirão rival (modo bandeirão). */
   carrying: boolean;
@@ -81,7 +105,7 @@ export interface Fighter {
   stateDuration: number;
   move: ActiveMove | null;
   dodgeDir: Vec2;
-  dodgeKind: 'step' | 'roll';
+  dodgeKind: 'step' | 'roll' | 'land';
   /** Barra de Raça (0..100): especial (R) e grito (G). */
   raca: number;
   /** Próximo acerto até este tick é contra-golpe (depois de parry/esquiva perfeita). */
@@ -164,6 +188,11 @@ export function isStanding(f: Fighter): boolean {
   return isAlive(f) && f.state !== 'downed';
 }
 
+/** No ar (pulando ou caindo), relativo ao chão debaixo do pé. */
+export function isAirborne(f: Fighter): boolean {
+  return f.y > f.ground + 0.01 || f.vy > 0;
+}
+
 /** Pode iniciar uma ação nova sem cancelar nada. */
 export function isActionable(f: Fighter): boolean {
   return f.state === 'idle' || f.state === 'block';
@@ -198,6 +227,7 @@ export function enterState(f: Fighter, state: FighterStateName, duration = 0): v
   f.stateTick = 0;
   f.stateDuration = duration;
   if (state !== 'attack' && state !== 'charging') f.move = null;
+  if (state !== 'traverse') f.traverse = null;
 }
 
 /** Transições por tempo. Chamado uma vez por tick (fora do hitstop), depois de incrementar stateTick. */

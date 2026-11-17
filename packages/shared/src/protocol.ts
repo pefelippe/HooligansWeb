@@ -1,4 +1,4 @@
-import { type Fighter, type FighterStateName, hasArmor, isInvulnerable } from './combat/fsm';
+import { type Fighter, type FighterStateName, hasArmor, isAirborne, isInvulnerable, type TraverseKind } from './combat/fsm';
 import type { GasCloud, SimState, Throwable } from './combat/sim';
 import { DEFAULT_COMBAT_DATA } from './combat/weapons';
 import type { PlayerInput } from './combat/input';
@@ -7,7 +7,7 @@ import type { ControlPointState, MatchEvent, MatchResult, MatchState, RosterEntr
 import type { CharacterVisual } from './visual';
 
 // Protocolo cliente <-> game server (JSON por enquanto; binário depois do marco de netcode).
-export const PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION = 7;
 
 /** Claims do ticket JWT emitido pela API ao entrar na fila. */
 export interface MatchTicketClaims {
@@ -138,7 +138,11 @@ export interface FighterSnapshot {
   buffed: boolean;
   /** Janela de contra-golpe aberta. */
   counter: boolean;
-  dodgeKind: 'step' | 'roll';
+  dodgeKind: 'step' | 'roll' | 'land';
+  /** No ar em relação ao chão debaixo do pé (em cima do carro não conta). */
+  airborne: boolean;
+  /** Travessia em curso (estado traverse). */
+  traverse: TraverseKind | null;
   /** Progresso 0..1 de canalização (curativo, levantando) ou do caído. */
   channel: number;
 }
@@ -220,6 +224,8 @@ export function toSnapshot(s: SimState, f: Fighter, data = DEFAULT_COMBAT_DATA):
     buffed: s.tick <= f.buffUntil,
     counter: s.tick <= f.counterUntil,
     dodgeKind: f.dodgeKind,
+    airborne: isAirborne(f),
+    traverse: f.traverse?.kind ?? null,
     channel:
       f.state === 'healing' || f.state === 'reviving' || f.state === 'downed'
         ? round(Math.min(1, f.stateTick / Math.max(1, f.stateDuration)))

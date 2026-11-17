@@ -1,4 +1,5 @@
-import type { TeamSide, Vec2 } from './combat/types';
+import type { TraverseKind } from './combat/fsm';
+import type { TeamSide, TraverseConstants, Vec2, Vec3 } from './combat/types';
 import { nextRandom } from './rng';
 
 // Mapa: estacionamento do Castelão (o estádio fica ao norte, atrás da grade, só de cenário),
@@ -239,12 +240,6 @@ export function inRect(p: Vec2, r: Rect): boolean {
   return Math.abs(p.x - r.x) <= r.hw && Math.abs(p.z - r.z) <= r.hd;
 }
 
-export interface Vec3 {
-  x: number;
-  y: number;
-  z: number;
-}
-
 /**
  * Fração [0, 1] do segmento a→b até o primeiro obstáculo (caixas do chão até `h`); 1 = livre.
  * Usado pela câmera para não atravessar paredes.
@@ -284,9 +279,30 @@ export function segmentBoxHit(boxes: readonly Box[], a: Vec3, b: Vec3): number {
   return best;
 }
 
-/** Empurra um círculo (lutador) para fora dos obstáculos. Determinístico. */
-export function resolveCircleCollision(pos: Vec2, radius: number, map: Pick<GameMap, 'boxes' | 'circles' | 'halfW' | 'halfD'>): void {
+/** Degrau que se sobe andando; caixa até esta altura abaixo do pé não colide. */
+export const STEP_UP = 0.3;
+/** Topo mais alto (acima do chão) que dá para escalar: carro sim; barraca, quiosque e grade não. */
+export const CLIMB_MAX = 1.6;
+
+type Solids = Pick<GameMap, 'boxes' | 'circles' | 'halfW' | 'halfD'>;
+
+/** Altura do chão debaixo do ponto: o topo mais alto alcançável (até `y + STEP_UP`) com o ponto em cima. */
+export function groundHeight(boxes: readonly Box[], p: Vec2, y: number): number {
+  let g = 0;
+  for (const b of boxes) if (b.h > g && b.h <= y + STEP_UP && Math.abs(p.x - b.x) <= b.hw && Math.abs(p.z - b.z) <= b.hd) g = b.h;
+  return g;
+}
+
+/**
+ * Empurra um círculo (lutador) para fora dos obstáculos. Determinístico.
+ * Caixa com o topo abaixo do pé (`y`) não colide: dá para andar em cima do carro.
+ * Devolve quanto empurrou (m), para detectar o impacto contra a parede.
+ */
+export function resolveCircleCollision(pos: Vec2, radius: number, map: Solids, y = 0): number {
+  const x0 = pos.x;
+  const z0 = pos.z;
   for (const b of map.boxes) {
+    if (b.h <= y + STEP_UP) continue;
     // Descarte rápido: longe da caixa.
     if (Math.abs(pos.x - b.x) > b.hw + radius || Math.abs(pos.z - b.z) > b.hd + radius) continue;
     const cx = Math.max(b.x - b.hw, Math.min(b.x + b.hw, pos.x));
@@ -323,4 +339,76 @@ export function resolveCircleCollision(pos: Vec2, radius: number, map: Pick<Game
   }
   pos.x = Math.max(-map.halfW + radius, Math.min(map.halfW - radius, pos.x));
   pos.z = Math.max(-map.halfD + radius, Math.min(map.halfD - radius, pos.z));
+  return Math.hypot(pos.x - x0, pos.z - z0);
+}
+
+export interface TraversePlan {
+  kind: TraverseKind;
+  to: Vec3;
+  /** Topo do obstáculo (o arco passa por cima). */
+  top: number;
+  ticks: number;
+}
+
+/** Entrada e saída [t0, t1] do raio p + d·t na caixa engordada por r (plano XZ), ou null. */
+function rayBox(p: Vec2, d: Vec2, b: Box, r: number): [number, number] | null {
+  let t0 = -Infinity;
+  let t1 = Infinity;
+  const slabs: [number, number, number, number][] = [
+    [p.x, d.x, b.x - b.hw - r, b.x + b.hw + r],
+    [p.z, d.z, b.z - b.hd - r, b.z + b.hd + r],
+  ];
+  for (const [o, v, lo, hi] of slabs) {
+    if (Math.abs(v) < 1e-9) {
+      if (o < lo || o > hi) return null;
+      continue;
+    }
+    let a = (lo - o) / v;
+    let c = (hi - o) / v;
+    if (a > c) [a, c] = [c, a];
+    t0 = Math.max(t0, a);
+    t1 = Math.min(t1, c);
+  }
+  return t0 <= t1 ? [t0, t1] : null;
+}
+
+/**
+ * Travessia possível andando em `dir` (normalizada) a partir de `p`, com o pé em `level`:
+ * pular por cima (baixo e fino), deslizar no capô (carro, correndo) ou subir (cabe o pé em cima).
+ * `air`: no ar, só sobe, e só se a borda está ao alcance da mão. A saída é validada (sem colisão).
+ */
+export function findTraverse(map: Solids, p: Vec2, level: number, dir: Vec2, r: number, running: boolean, t: TraverseConstants, air = false): TraversePlan | null {
+  let hit: Box | undefined;
+  let tIn = Infinity;
+  let tOut = 0;
+  for (const b of map.boxes) {
+    if (b.h <= level + STEP_UP) continue;
+    const span = rayBox(p, dir, b, r);
+    if (!span || span[0] > t.probe || span[1] < 0 || span[0] >= tIn) continue;
+    hit = b;
+    [tIn, tOut] = span;
+  }
+  if (!hit) return null;
+  const box = hit;
+  const alto = box.h - level;
+  if (alto > (air ? t.airMantleReach : CLIMB_MAX)) return null;
+  const at = (d: number, y: number): Vec3 => ({ x: p.x + dir.x * d, y, z: p.z + dir.z * d });
+  const free = (q: Vec3) => resolveCircleCollision({ x: q.x, z: q.z }, r, map, q.y) < 1e-6;
+  if (!air) {
+    const depth = 2 * (Math.abs(dir.x) * box.hw + Math.abs(dir.z) * box.hd);
+    const over = (kind: TraverseKind, ticks: number): TraversePlan | null => {
+      const to = at(tOut + 0.35, 0);
+      to.y = groundHeight(map.boxes, to, level);
+      return free(to) ? { kind, to, top: box.h, ticks } : null;
+    };
+    const vault = alto <= t.vaultMaxHeight && depth <= t.vaultMaxDepth ? over('pular', running ? t.vaultRunTicks : t.vaultTicks) : null;
+    if (vault) return vault;
+    const hood = box.kind === 'carro' && running && depth <= t.hoodMaxDepth ? over('capo', t.hoodTicks) : null;
+    if (hood) return hood;
+  }
+  if (Math.min(box.hw, box.hd) < r) return null;
+  // 0,5 m para dentro da borda, em cima.
+  const to = at(tIn + r + 0.5, box.h);
+  if (Math.abs(to.x - box.x) > box.hw || Math.abs(to.z - box.z) > box.hd || !free(to)) return null;
+  return { kind: 'subir', to, top: box.h, ticks: air ? t.airMantleTicks : Math.round(t.climbBaseTicks + t.climbTicksPerMeter * alto) };
 }

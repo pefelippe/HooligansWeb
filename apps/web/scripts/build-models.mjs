@@ -23,11 +23,13 @@ const ANIMS = {
   'Universal Animation Library[Standard]/Unreal-Godot/UAL1_Standard.glb': [
     'Idle_Loop', 'Walk_Loop', 'Jog_Fwd_Loop', 'Sprint_Loop', 'Jump_Start', 'Jump_Loop', 'Jump_Land',
     'Punch_Jab', 'Punch_Cross', 'Sword_Attack', 'Sword_Idle', 'Roll', 'Hit_Chest', 'Hit_Head', 'Death01',
-    'Crouch_Idle_Loop', 'Fixing_Kneeling', 'Spell_Simple_Shoot',
+    'Crouch_Idle_Loop', 'Fixing_Kneeling', 'Spell_Simple_Shoot', 'Pistol_Shoot',
   ],
   'Universal Animation Library 2[Standard]/Unreal-Godot/UAL2_Standard.glb': [
     'Hit_Knockback', 'LayToIdle', 'Melee_Hook', 'Sword_Block', 'Sword_Regular_A', 'Sword_Regular_B', 'Sword_Regular_C',
     'Sword_Heavy_Combo', 'Sword_Dash', 'Shield_OneShot', 'Consume', 'Idle_Shield_Break',
+    // Travessias e carrinho.
+    'ClimbUp_1m', 'NinjaJump_Start', 'NinjaJump_Land', 'Slide_Start', 'Slide_Loop', 'Slide_Exit', 'OverhandThrow',
   ],
 };
 

@@ -88,7 +88,8 @@ export class Predictor {
     const self = cloneFighter(serverSelf);
     const dummies = others
       .filter((o) => o.id !== this.selfId && o.state !== 'ko' && o.state !== 'dead' && o.state !== 'downed')
-      .map((o) => createFighter({ id: o.id, team: self.team, pos: o.pos, facing: o.facing }, this.data));
+      // Com a altura: inimigo em cima do carro não "cai" dentro da caixa na predição.
+      .map((o) => ({ ...createFighter({ id: o.id, team: self.team, pos: o.pos, facing: o.facing }, this.data), y: o.y, ground: o.airborne ? 0 : o.y }));
     this.state = {
       tick,
       fighters: [self, ...dummies],

@@ -34,6 +34,35 @@ describe('fila de inputs do servidor', () => {
 });
 
 describe('predição do cliente', () => {
+  it('reconciliar no meio de uma subida no carro (travessia) chega no mesmo lugar e altura', () => {
+    const car = { x: 0, z: 3, hw: 0.95, hd: 2.2, h: 1.45, kind: 'carro' as const, color: '#000' };
+    const collision = { boxes: [car], circles: [], halfW: 50, halfD: 50 };
+    const server = createSim(
+      [
+        { id: 'me', team: 0, pos: { x: 0, z: 0 } },
+        { id: 'out', team: 1, pos: { x: 20, z: 20 } },
+      ],
+      { collision },
+    );
+    // Encosta no carro, Espaço (sobe), anda em cima e cai do outro lado.
+    const script = (t: number) => inp(t === 10 ? Buttons.JUMP : 0, 0, t < 60 ? 1 : 0);
+    const pred = new Predictor('me', { sedes: server.sedes, arenaHalfSize: server.arenaHalfSize, collision });
+    pred.reconcile(0, 0, server.fighters[0]!, server.fighters.map((f) => toSnapshot(server, f)));
+    let snap: { tick: number; self: string; others: ReturnType<typeof toSnapshot>[] } | null = null;
+    for (let seq = 1; seq <= 40; seq++) {
+      pred.applyLocal(seq, script(seq));
+      step(server, { me: script(seq) });
+      if (seq === 20) snap = { tick: server.tick, self: JSON.stringify(server.fighters[0]), others: server.fighters.map((f) => toSnapshot(server, f)) };
+    }
+    expect(server.fighters[0]?.state === 'traverse' || (server.fighters[0]?.y ?? 0) > 1).toBe(true);
+    if (!snap) return;
+    pred.reconcile(snap.tick, 20, JSON.parse(snap.self), snap.others);
+    const me = server.fighters[0]!;
+    expect(pred.self?.state).toBe(me.state);
+    expect(pred.self?.pos.z).toBeCloseTo(me.pos.z, 9);
+    expect(pred.self?.y).toBeCloseTo(me.y, 9);
+  });
+
   it('reconciliar com o servidor e reaplicar os inputs pendentes chega no mesmo estado do servidor', () => {
     const server = createSim([
       { id: 'me', team: 0, pos: { x: 0, z: 0 } },

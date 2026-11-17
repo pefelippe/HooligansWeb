@@ -8,6 +8,7 @@ import {
   hasArmor,
   inCancelWindow,
   isActionable,
+  isAirborne,
   isAlive,
   isInvulnerable,
   isStanding,
@@ -15,10 +16,10 @@ import {
 } from './fsm';
 import { angleDiff, dirFromYaw, dist, hitboxOverlaps, relativeAngleDeg, turnToward, yawTo } from './geometry';
 import { Buttons, NEUTRAL_INPUT, type PlayerInput, sanitizeInput } from './input';
-import type { CombatData, MoveDef, TeamSide, Vec2, WeaponDef } from './types';
+import type { CombatConstants, CombatData, MoveDef, TeamSide, Vec2, WeaponDef } from './types';
 import { TICK_RATE } from './types';
 import { DEFAULT_COMBAT_DATA } from './weapons';
-import { type GameMap, resolveCircleCollision, segmentBoxHit } from '../map';
+import { findTraverse, type GameMap, groundHeight, resolveCircleCollision, segmentBoxHit, type TraversePlan } from '../map';
 
 // Simulação de combate com tick fixo de 60 Hz. Determinística: mesmo estado + mesmos
 // inputs = mesmo resultado. Roda igual no servidor (autoritativo), no cliente
@@ -106,7 +107,11 @@ export type SimEvent =
   | { type: 'throw'; tick: number; fighter: string; kind: Throwable['kind'] }
   | { type: 'explosion'; tick: number; fighter: string; pos: Vec2; hit: string[] }
   | { type: 'gas'; tick: number; fighter: string; pos: Vec2 }
-  | { type: 'vestBreak'; tick: number; fighter: string };
+  | { type: 'vestBreak'; tick: number; fighter: string }
+  /** Arremessado contra carro/parede. */
+  | { type: 'splat'; tick: number; fighter: string; attacker: string | null }
+  /** Caiu do alto atordoado. */
+  | { type: 'fall'; tick: number; fighter: string; damage: number };
 
 /** Ganchos do servidor (a predição do cliente não usa). */
 export interface StepHooks {
@@ -140,6 +145,10 @@ export function createFighter(nf: NewFighter, data: CombatData = DEFAULT_COMBAT_
     pos: { ...(nf.pos ?? { x: 0, z: 0 }) },
     y: 0,
     vy: 0,
+    ground: 0,
+    groundedTick: 0,
+    fallFrom: 0,
+    traverse: null,
     running: false,
     carrying: false,
     vel: { x: 0, z: 0 },
@@ -284,7 +293,7 @@ export function step(s: SimState, inputs: Readonly<Record<string, PlayerInput | 
   resolveHits(s, data, events, hooks);
   updateThrowables(s, data, events);
   for (const f of s.fighters) endOfTick(s, f, data, events);
-  separate(s, data);
+  separate(s, data, events);
   return events;
 }
 
@@ -296,16 +305,17 @@ function advance(s: SimState, f: Fighter, data: CombatData, events: SimEvent[]):
     f.hitstop--;
     return;
   }
-  // Gravidade (vale em qualquer estado, inclusive para quem cai nocauteado no ar).
-  if (f.y > 0 || f.vy > 0) {
+  // Gravidade (vale em qualquer estado menos travessia, inclusive para quem cai nocauteado do carro).
+  if (f.state !== 'traverse' && isAirborne(f)) {
     f.vy -= c.gravity / TICK_RATE;
     f.y += f.vy / TICK_RATE;
-    if (f.y <= 0) {
-      f.y = 0;
-      f.vy = 0;
-    }
+    f.fallFrom = Math.max(f.fallFrom, f.y);
+    const g = groundOf(s, f);
+    if (f.y <= g) land(s, f, g, data, events);
   }
   f.stateTick++;
+  // Pisão: o startup segura no ar até tocar o chão.
+  if (f.state === 'attack' && f.move?.def.plunge && isAirborne(f)) f.stateTick = Math.min(f.stateTick, f.move.def.startup);
   // Caído por tempo demais: sangrou até o fim.
   if (f.state === 'downed' && f.stateTick >= f.stateDuration) {
     knockOut(s, f, fighterById(s, f.downedBy), data, events);
@@ -342,7 +352,7 @@ function advance(s: SimState, f: Fighter, data: CombatData, events: SimEvent[]):
       const fwd = dirFromYaw(f.facing);
       if (f.move && attackPhase(f.move.def, f.stateTick) !== 'recovery') {
         const frames = f.move.def.startup + f.move.def.active;
-        translate(f, fwd, f.move.def.lunge / frames);
+        translate(f, fwd, (f.move.def.lunge + f.move.extraLunge) / frames);
       }
       // Golpe saindo da corrida leva o embalo; o input ainda desloca um pouco (dá para bater andando).
       translate(f, fwd, f.momentum * dt);
@@ -356,6 +366,9 @@ function advance(s: SimState, f: Fighter, data: CombatData, events: SimEvent[]):
       translate(f, f.dodgeDir, d.distance / Math.max(1, d.duration - 2));
       break;
     }
+    case 'traverse':
+      advanceTraverse(s, f, data);
+      break;
     default:
       break;
   }
@@ -380,6 +393,91 @@ function translate(f: Fighter, dir: Vec2, amount: number): void {
   f.pos.z += dir.z * amount;
 }
 
+// ---------------------------------------------------------------- altura e travessias
+
+/** Chão debaixo do pé (teto do carro, ou 0). Sem mapa (lab), sempre 0. */
+function groundOf(s: SimState, f: Fighter): number {
+  return s.collision ? groundHeight(s.collision.boxes, f.pos, f.y) : 0;
+}
+
+/** Quem bateu por último (crédito do splat e da queda). */
+function lastAttacker(s: SimState, f: Fighter): Fighter | null {
+  let best: string | null = null;
+  for (const [id, tick] of Object.entries(f.damagedBy)) if (best === null || tick > (f.damagedBy[best] ?? NEVER)) best = id;
+  return fighterById(s, best);
+}
+
+const STUNNED: ReadonlySet<string> = new Set(['hitstun', 'staggered', 'guardbreak', 'knockdown']);
+const STRIKES: ReadonlySet<BufferedAction> = new Set(['light', 'heavy', 'kick']);
+
+/** Tocou o chão: pisão explode, queda atordoado machuca, correndo rola, queda alta parado fica lento. */
+function land(s: SimState, f: Fighter, g: number, data: CombatData, events: SimEvent[]): void {
+  const c = data.constants;
+  const fall = f.fallFrom - g;
+  f.y = g;
+  f.vy = 0;
+  f.ground = g;
+  f.fallFrom = g;
+  f.groundedTick = s.tick;
+  const m = f.move;
+  if (f.state === 'attack' && m?.def.plunge) {
+    // O bônus da altura entra como carga (chargeDamageBonus é o teto).
+    m.charge = Math.min(1, (Math.max(0, fall - c.plunge.minHeight) * c.plunge.bonusPerMeter) / (m.def.chargeDamageBonus || 1));
+  } else if (fall >= c.fall.minHeight && STUNNED.has(f.state)) {
+    const by = lastAttacker(s, f);
+    f.hp -= c.fall.damage;
+    events.push({ type: 'fall', tick: s.tick, fighter: f.id, damage: c.fall.damage });
+    if (f.hp <= 0) lethal(s, f, by, data, events);
+    else if (f.state !== 'knockdown') enterState(f, 'knockdown', c.knockdownTicks);
+  } else if (f.state === 'idle' && fall >= c.landing.rollMinFall && f.running && Math.hypot(f.moveDir.x, f.moveDir.z) > 0.1) {
+    const len = Math.hypot(f.moveDir.x, f.moveDir.z);
+    f.dodgeDir = { x: f.moveDir.x / len, z: f.moveDir.z / len };
+    f.dodgeKind = 'land';
+    enterState(f, 'dodge');
+  } else if (f.state === 'idle' && fall >= c.landing.lagMinFall) {
+    f.slowUntil = Math.max(f.slowUntil, s.tick + c.landing.lagSlowTicks);
+  }
+}
+
+function enterTraverse(f: Fighter, plan: TraversePlan, c: CombatConstants): void {
+  enterState(f, 'traverse', Math.round(plan.ticks * (f.carrying ? c.traverse.carrierTicksMultiplier : 1)));
+  f.traverse = { kind: plan.kind, from: { x: f.pos.x, y: f.y, z: f.pos.z }, to: plan.to, top: plan.top, strike: false };
+  f.vy = 0;
+  f.vel = { x: 0, z: 0 };
+  f.running = false;
+  f.protectedUntil = 0;
+}
+
+/** Travessia roteirizada: subir = o corpo sobe e depois entra; pular/capô = arco por cima. */
+function advanceTraverse(s: SimState, f: Fighter, data: CombatData): void {
+  const tr = f.traverse;
+  if (!tr) return;
+  const k = Math.min(1, f.stateTick / Math.max(1, f.stateDuration));
+  const climb = tr.kind === 'subir';
+  const kxz = climb ? Math.max(0, (k - 0.4) / 0.6) : k;
+  const e = kxz * kxz * (3 - 2 * kxz);
+  const ky = climb ? Math.min(1, k / 0.6) : k;
+  // Capô: o corpo desliza deitado, mais baixo que o teto do carro.
+  const clear = climb ? 0 : Math.max(0, tr.top + (tr.kind === 'capo' ? -0.35 : 0.25) - Math.max(tr.from.y, tr.to.y));
+  f.pos.x = tr.from.x + (tr.to.x - tr.from.x) * e;
+  f.pos.z = tr.from.z + (tr.to.z - tr.from.z) * e;
+  f.y = tr.from.y + (tr.to.y - tr.from.y) * ky + Math.sin(Math.PI * k) * clear;
+  if (k < 1) return;
+  f.pos = { x: tr.to.x, z: tr.to.z };
+  f.y = f.ground = f.fallFrom = tr.to.y;
+  f.groundedTick = s.tick;
+  const strike = tr.strike;
+  enterState(f, 'idle');
+  // Golpe apertado no meio do pulo/capô: sai de voadora.
+  if (strike && startAttack(s, f, data.common.voadora, -1, data)) f.vy = 3;
+}
+
+/** O alvo está na faixa de altura que o golpe alcança (ninguém soca quem está em cima do carro). */
+function inVerticalReach(a: Fighter, t: Fighter, def: MoveDef, c: CombatConstants): boolean {
+  const dy = t.y - a.y;
+  return dy <= (def.vReach ?? c.vReachUp) && dy >= -c.vReachDown;
+}
+
 function fighterById(s: SimState, id: string | null): Fighter | null {
   return id ? (s.fighters.find((o) => o.id === id) ?? null) : null;
 }
@@ -391,6 +489,9 @@ function respawn(s: SimState, f: Fighter, data: CombatData, events: SimEvent[]):
   f.momentum = 0;
   f.y = 0;
   f.vy = 0;
+  f.ground = 0;
+  f.fallFrom = 0;
+  f.groundedTick = s.tick;
   f.hp = c.maxHp;
   f.stamina = c.maxStamina;
   f.protectedUntil = s.tick + c.spawnProtectionTicks;
@@ -407,6 +508,7 @@ function respawn(s: SimState, f: Fighter, data: CombatData, events: SimEvent[]):
 
 const ACTION_BUTTONS: [BufferedAction, number][] = [
   ['dodge', Buttons.DODGE],
+  ['jump', Buttons.JUMP],
   ['special', Buttons.SPECIAL],
   ['shout', Buttons.SHOUT],
   ['heal', Buttons.HEAL],
@@ -460,10 +562,10 @@ function processInput(s: SimState, f: Fighter, input: PlayerInput, data: CombatD
   }
   if (pressed & (Buttons.WEAPON_NEXT | Buttons.WEAPON_PREV) && isActionable(f)) switchWeapon(f, pressed & Buttons.WEAPON_NEXT ? 1 : -1, data);
   const throwKind = pressed & Buttons.THROW_BOMB ? 'bomba' : pressed & Buttons.THROW_GAS ? 'gas' : null;
-  if (throwKind && isActionable(f) && f.y <= 0 && s.tick >= f.throwReadyTick && (throwKind === 'bomba' ? f.bombas : f.gases) > 0) {
+  if (throwKind && isActionable(f) && !isAirborne(f) && s.tick >= f.throwReadyTick && (throwKind === 'bomba' ? f.bombas : f.gases) > 0) {
     throwItem(s, f, throwKind, desiredYaw, data, events);
   }
-  const grounded = f.y <= 0 && f.vy <= 0;
+  const grounded = !isAirborne(f);
   const moving = Math.hypot(input.moveX, input.moveZ) > 0.1;
   f.running = f.state === 'idle' && moving && !!(held & Buttons.RUN) && f.stamina >= 1 && s.tick >= f.slowUntil;
 
@@ -475,12 +577,22 @@ function processInput(s: SimState, f: Fighter, input: PlayerInput, data: CombatD
         f.stamina = Math.max(0, f.stamina - c.runStaminaPerTick);
         f.lastStaminaSpendTick = s.tick;
       }
-      if (pressed & Buttons.JUMP && grounded && spendStamina(s, f, c.jumpStaminaCost)) {
-        f.vy = c.jumpVelocity;
-      } else if (pressed & Buttons.USE && grounded && tryUse(s, f, data)) {
+      if (pressed & Buttons.USE && grounded && tryUse(s, f, data)) {
         // levantar aliado
       } else if (f.buffer && tryStart(s, f, f.buffer.action, data, events)) f.buffer = null;
-      else if (held & Buttons.BLOCK && grounded) enterBlock(s, f, data);
+      else if (!grounded && moving && f.vy <= 2 && s.collision) {
+        // No ar, encostando numa borda ao alcance da mão: sobe sozinho.
+        const len = Math.hypot(input.moveX, input.moveZ);
+        const plan = findTraverse(s.collision, f.pos, f.y, { x: input.moveX / len, z: input.moveZ / len }, c.hurtRadius, false, c.traverse, true);
+        if (plan && spendStamina(s, f, c.traverse.cost)) enterTraverse(f, plan, c);
+      } else if (held & Buttons.BLOCK && grounded) enterBlock(s, f, data);
+      break;
+    case 'traverse':
+      // Golpe na segunda metade do pulo/capô: vira voadora na saída.
+      if (f.traverse && f.traverse.kind !== 'subir' && f.stateTick * 2 >= f.stateDuration && f.buffer && STRIKES.has(f.buffer.action)) {
+        f.traverse.strike = true;
+        f.buffer = null;
+      }
       break;
     case 'block':
       f.facing = desiredYaw;
@@ -495,8 +607,8 @@ function processInput(s: SimState, f: Fighter, input: PlayerInput, data: CombatD
       const first = weaponOf(f, data).moves.light[0];
       if (f.buffer?.action === 'light' && first && f.stamina >= c.blockCounterCost + first.staminaCost) {
         spendStamina(s, f, c.blockCounterCost);
+        f.facing = desiredYaw;
         if (startAttack(s, f, first, 0, data)) {
-          f.facing = desiredYaw;
           f.buffer = null;
         }
       }
@@ -521,19 +633,22 @@ function processInput(s: SimState, f: Fighter, input: PlayerInput, data: CombatD
       const m = f.move;
       if (!m) break;
       const phase = attackPhase(m.def, f.stateTick);
-      // Com alvo travado, o corpo gruda nele no startup e no ativo; sem trava, gira devagar.
+      // Com alvo travado, o corpo gruda nele no startup e no ativo; sem trava, gira devagar
+      // (para o alvo do magnetismo, se houver: dá para sair de lado e fazer o golpe errar).
       // Arma de tiro (com cooldown) mira na hora, como com alvo travado.
+      const pull = !f.lockTarget && m.magnet ? fighterById(s, m.magnet) : null;
+      const turnTo = pull && isStanding(pull) ? yawTo(f.pos, pull.pos) : desiredYaw;
       if ((f.lockTarget || weaponOf(f, data).cooldown) && phase !== 'recovery') f.facing = desiredYaw;
-      else if (f.lockTarget || phase !== 'recovery') f.facing = turnToward(f.facing, desiredYaw, c.attackTurnRate);
+      else if (f.lockTarget || phase !== 'recovery') f.facing = turnToward(f.facing, turnTo, c.attackTurnRate);
       if (f.buffer) {
         const a = f.buffer.action;
         if (a === 'light' && inCancelWindow(f)) {
           const next = weaponOf(f, data).moves.light[m.chainIndex + 1];
-          if (next && m.def.canChainInto.includes(next.id) && startAttack(s, f, next, m.chainIndex + 1, data)) {
+          if (next && m.def.canChainInto.includes(next.id)) {
             f.facing = desiredYaw;
-            f.buffer = null;
+            if (startAttack(s, f, next, m.chainIndex + 1, data)) f.buffer = null;
           }
-        } else if ((a === 'dodge' || a === 'special') && tryStart(s, f, a, data, events)) {
+        } else if ((a === 'dodge' || a === 'special' || a === 'jump') && tryStart(s, f, a, data, events)) {
           f.buffer = null;
         }
       }
@@ -639,12 +754,14 @@ function tryUse(s: SimState, f: Fighter, data: CombatData): boolean {
 }
 
 function tryStart(s: SimState, f: Fighter, action: BufferedAction, data: CombatData, events: SimEvent[]): boolean {
-  // Esquiva cancela a recuperação de qualquer golpe.
-  const recoveryDodge = action === 'dodge' && f.state === 'attack' && !!f.move && attackPhase(f.move.def, f.stateTick) === 'recovery';
+  // Esquiva e pulo cancelam a recuperação de qualquer golpe.
+  const recoveryDodge = (action === 'dodge' || action === 'jump') && f.state === 'attack' && !!f.move && attackPhase(f.move.def, f.stateTick) === 'recovery';
   if (!isActionable(f) && !(f.state === 'attack' && inCancelWindow(f)) && f.state !== 'charging' && !recoveryDodge) return false;
   const c = data.constants;
   const w = weaponOf(f, data);
-  const airborne = f.y > 0;
+  const airborne = isAirborne(f);
+  // Caindo do alto (de cima do carro): chute e pesado viram pisão.
+  const plunging = airborne && f.y - f.ground >= c.plunge.minHeight;
   switch (action) {
     case 'light': {
       const first = w.moves.light[0];
@@ -656,6 +773,7 @@ function tryStart(s: SimState, f: Fighter, action: BufferedAction, data: CombatD
       return ok;
     }
     case 'heavy': {
+      if (plunging) return startAttack(s, f, data.common.pisao, -1, data);
       const def = w.moves.heavy;
       if (!spendStamina(s, f, def.staminaCost)) return false;
       f.protectedUntil = 0;
@@ -665,8 +783,26 @@ function tryStart(s: SimState, f: Fighter, action: BufferedAction, data: CombatD
       return true;
     }
     case 'kick':
-      // No ar o chute vira voadora.
-      return startAttack(s, f, airborne ? data.common.voadora : data.common.kick, -1, data);
+      // No ar o chute vira voadora (pisão, caindo do alto); correndo, carrinho.
+      return startAttack(s, f, plunging ? data.common.pisao : airborne ? data.common.voadora : f.running ? data.common.carrinho : data.common.kick, -1, data);
+    case 'jump': {
+      const coyote = s.tick - f.groundedTick <= c.coyoteTicks && f.vy <= 0;
+      if (airborne && !coyote) return false; // fica no buffer: pula ao aterrissar
+      const len = Math.hypot(f.moveDir.x, f.moveDir.z);
+      const dir = len > 0.1 ? { x: f.moveDir.x / len, z: f.moveDir.z / len } : dirFromYaw(f.facing);
+      const plan = s.collision ? findTraverse(s.collision, f.pos, f.y, dir, c.hurtRadius, f.running && !f.carrying, c.traverse) : null;
+      if (plan) {
+        // Correndo, pular e deslizar são de graça (a corrida não quebra).
+        if (!(f.running && plan.kind !== 'subir') && !spendStamina(s, f, c.traverse.cost)) return false;
+        enterTraverse(f, plan, c);
+        return true;
+      }
+      if (!spendStamina(s, f, c.jumpStaminaCost)) return false;
+      if (f.state !== 'idle') enterState(f, 'idle');
+      f.vy = c.jumpVelocity;
+      f.groundedTick = NEVER;
+      return true;
+    }
     case 'shove': {
       // Inimigo atordoado na frente: cabeçada em vez de empurrão.
       const dazed = s.fighters.find(
@@ -727,7 +863,7 @@ function tryStart(s: SimState, f: Fighter, action: BufferedAction, data: CombatD
 }
 
 function newMove(def: MoveDef, chainIndex: number, charge = 0): ActiveMove {
-  return { def, chainIndex, charge, hitIds: [], dodgedIds: [], segment: 0 };
+  return { def, chainIndex, charge, hitIds: [], dodgedIds: [], segment: 0, magnet: null, extraLunge: 0 };
 }
 
 function startAttack(s: SimState, f: Fighter, def: MoveDef, chainIndex: number, data: CombatData, charge = 0, payStamina = true): boolean {
@@ -739,7 +875,31 @@ function startAttack(s: SimState, f: Fighter, def: MoveDef, chainIndex: number, 
   enterState(f, 'attack');
   f.stateTick = 1;
   f.move = newMove(def, chainIndex, charge);
+  if (def.plunge) f.vy = Math.min(f.vy, -4); // desce em cima
+  else if (!f.lockTarget && !def.shot && !def.multiHit) magnetize(s, f, f.move, data);
   return true;
+}
+
+/** Magnetismo sem lock-on: o golpe gira até o inimigo mais perto no cone e avança o que falta para alcançar. */
+function magnetize(s: SimState, f: Fighter, m: ActiveMove, data: CombatData): void {
+  const c = data.constants;
+  const g = c.magnet;
+  const hb = m.def.hitbox;
+  const reach = hb.shape === 'arc' ? hb.range : hb.to;
+  let best: Fighter | undefined;
+  let bestD = g.range;
+  for (const o of s.fighters) {
+    if (o.team === f.team || !isStanding(o) || !inVerticalReach(f, o, m.def, c)) continue;
+    const d = dist(f.pos, o.pos);
+    if (d > bestD || Math.abs(angleDiff(yawTo(f.pos, o.pos), f.facing)) > (g.coneDeg * Math.PI) / 180) continue;
+    if (s.collision && segmentBoxHit(s.collision.boxes, { x: f.pos.x, y: f.y + 1.2, z: f.pos.z }, { x: o.pos.x, y: o.y + 1.2, z: o.pos.z }) < 1) continue;
+    best = o;
+    bestD = d;
+  }
+  if (!best) return;
+  f.facing = yawTo(f.pos, best.pos);
+  m.magnet = best.id;
+  m.extraLunge = Math.max(0, Math.min(g.maxExtraLunge, bestD - reach + 0.2));
 }
 
 // ---------------------------------------------------------------- acertos
@@ -771,7 +931,11 @@ function resolveHits(s: SimState, data: CombatData, events: SimEvent[], hooks?: 
     for (const t of s.fighters) {
       if (m.def.shot && t !== shotTarget) continue;
       if (t === a || t.team === a.team || m.hitIds.includes(t.id) || !isAlive(t)) continue;
-      if (m.def.low && t.y > c.kickMaxTargetHeight) continue; // pulou o golpe baixo
+      if (m.def.low && t.y - t.ground > c.kickMaxTargetHeight) continue; // pulou o golpe baixo
+      if (!m.def.shot && !inVerticalReach(a, t, m.def, c)) continue; // alto ou baixo demais (carro)
+      // Carrinho: o corpo rente ao chão passa por baixo de golpe alto.
+      const lp = t.state === 'attack' ? t.move?.def.lowProfile : undefined;
+      if (lp && !m.def.low && !m.def.shot && t.stateTick >= lp[0] && t.stateTick <= lp[1]) continue;
       // O tiro já foi conferido em firstInLine (com as posições que o atirador via).
       if (!m.def.shot && !hitboxOverlaps(m.def.hitbox, a.pos, a.facing, t.pos, c.hurtRadius)) continue;
       if (isInvulnerable(t, s.tick, c)) {
@@ -806,7 +970,7 @@ function firstInLine(s: SimState, a: Fighter, m: ActiveMove, hurtRadius: number,
   }
   if (!best || !s.collision) return best;
   const to = at(best);
-  const blocked = segmentBoxHit(s.collision.boxes, { x: a.pos.x, y: SHOT_FROM_Y, z: a.pos.z }, { x: to.x, y: SHOT_TO_Y, z: to.z }) < 1;
+  const blocked = segmentBoxHit(s.collision.boxes, { x: a.pos.x, y: a.y + SHOT_FROM_Y, z: a.pos.z }, { x: to.x, y: best.y + SHOT_TO_Y, z: to.z }) < 1;
   return blocked ? undefined : best;
 }
 
@@ -1002,8 +1166,8 @@ function throwItem(s: SimState, f: Fighter, kind: Throwable['kind'], yaw: number
   f.facing = yaw;
   const d = dirFromYaw(yaw);
   // O arco passa por cima de carro e grade, mas bate em parede alta (galpão, ônibus, quiosque) e cai ali.
-  const far = { x: f.pos.x + d.x * c.range, y: THROW_ARC_Y, z: f.pos.z + d.z * c.range };
-  const free = s.collision ? segmentBoxHit(s.collision.boxes, { x: f.pos.x, y: THROW_ARC_Y, z: f.pos.z }, far) : 1;
+  const far = { x: f.pos.x + d.x * c.range, y: f.y + THROW_ARC_Y, z: f.pos.z + d.z * c.range };
+  const free = s.collision ? segmentBoxHit(s.collision.boxes, { x: f.pos.x, y: f.y + THROW_ARC_Y, z: f.pos.z }, far) : 1;
   const reach = Math.max(0, free * c.range - (free < 1 ? 0.6 : 0));
   const to = { x: f.pos.x + d.x * reach, z: f.pos.z + d.z * reach };
   (s.throwables ??= []).push({ kind, owner: f.id, team: f.team, from: { ...f.pos }, to, t0: s.tick, t1: s.tick + c.flightTicks });
@@ -1225,16 +1389,18 @@ function endOfTick(s: SimState, f: Fighter, data: CombatData, events: SimEvent[]
   }
 }
 
-/** Empurra lutadores sobrepostos (corpo a corpo, sem passar por dentro). */
-function separate(s: SimState, data: CombatData): void {
+/** Empurra lutadores sobrepostos (corpo a corpo, sem passar por dentro), resolve o mapa e atualiza o chão. */
+function separate(s: SimState, data: CombatData, events: SimEvent[]): void {
   const minD = data.constants.hurtRadius * 2;
   const fs = s.fighters;
+  const solid = (f: Fighter) => isStanding(f) && f.state !== 'dodge' && f.state !== 'traverse';
   for (let i = 0; i < fs.length; i++) {
     const a = fs[i];
-    if (!a || !isStanding(a) || a.state === 'dodge') continue;
+    if (!a || !solid(a)) continue;
     for (let j = i + 1; j < fs.length; j++) {
       const b = fs[j];
-      if (!b || !isStanding(b) || b.state === 'dodge') continue;
+      // Um em cima do carro e outro embaixo não se empurram.
+      if (!b || !solid(b) || Math.abs(a.y - b.y) > 1) continue;
       const d = dist(a.pos, b.pos);
       if (d >= minD) continue;
       const nx = d > 1e-6 ? (b.pos.x - a.pos.x) / d : 1;
@@ -1246,7 +1412,31 @@ function separate(s: SimState, data: CombatData): void {
       b.pos.z += nz * push;
     }
   }
-  if (s.collision) {
-    for (const f of fs) if (isAlive(f)) resolveCircleCollision(f.pos, data.constants.hurtRadius, s.collision);
+  for (const f of fs) {
+    if (!isAlive(f) || f.state === 'traverse') continue;
+    if (s.collision) {
+      const pushed = resolveCircleCollision(f.pos, data.constants.hurtRadius, s.collision, f.y);
+      if (pushed > 0.02) splat(s, f, data, events);
+      f.ground = groundOf(s, f);
+      if (f.y < f.ground) f.y = f.ground; // degrau
+    }
+    if (!isAirborne(f)) {
+      f.groundedTick = s.tick;
+      f.fallFrom = f.y;
+    }
   }
+}
+
+/** Arremessado contra o carro/parede com força: dano e atordoa. A velocidade zera, então é um por golpe. */
+function splat(s: SimState, f: Fighter, data: CombatData, events: SimEvent[]): void {
+  const c = data.constants;
+  if (!STUNNED.has(f.state) || Math.hypot(f.vel.x, f.vel.z) < c.splat.minSpeed) return;
+  const by = lastAttacker(s, f);
+  f.vel = { x: 0, z: 0 };
+  f.hitstop = 4;
+  f.hp -= c.splat.damage;
+  if (by) f.damagedBy[by.id] = s.tick;
+  events.push({ type: 'splat', tick: s.tick, fighter: f.id, attacker: by?.id ?? null });
+  if (f.hp <= 0) lethal(s, f, by, data, events);
+  else if (f.state !== 'knockdown') enterState(f, 'staggered', c.splat.stunTicks);
 }

@@ -8,6 +8,12 @@ export interface Vec2 {
   z: number;
 }
 
+export interface Vec3 {
+  x: number;
+  y: number;
+  z: number;
+}
+
 /**
  * Índice da facção. Hoje as 2 torcidas. Para a polícia: vira `0 | 1 | 2`, `PerTeam` ganha um T
  * e `TEAM_COUNT` = 3; o compilador aponta o resto.
@@ -86,6 +92,12 @@ export interface MoveDef {
   alwaysBackstab?: boolean;
   /** Ignora o bloqueio (acerta mesmo com guarda). */
   unblockable?: boolean;
+  /** Alcance vertical para cima (m): alvo mais alto que isto não é atingido. Padrão: constants.vReachUp. */
+  vReach?: number;
+  /** Corpo baixo (carrinho): golpes que não são `low` passam por cima nestes frames [início, fim]. */
+  lowProfile?: readonly [number, number];
+  /** Ataque de queda (pisão): o startup segura até aterrissar e o dano cresce com a altura. */
+  plunge?: boolean;
 }
 
 export type WeaponType = 'nenhum' | 'contundente' | 'cortante' | 'perfurante';
@@ -128,6 +140,26 @@ export interface DodgeDef {
   iframes: readonly [number, number];
 }
 
+export interface TraverseConstants {
+  /** Distância à frente (m) em que se procura o obstáculo. */
+  probe: number;
+  vaultMaxHeight: number;
+  vaultMaxDepth: number;
+  vaultTicks: number;
+  vaultRunTicks: number;
+  hoodMaxDepth: number;
+  hoodTicks: number;
+  climbBaseTicks: number;
+  climbTicksPerMeter: number;
+  /** No ar: sobe sozinho se a borda está até N m acima do pé. */
+  airMantleReach: number;
+  airMantleTicks: number;
+  /** Custo parado/andando (correndo, pular e capô são de graça). */
+  cost: number;
+  /** Carregando o bandeirão: travessia mais lenta. */
+  carrierTicksMultiplier: number;
+}
+
 export interface CombatConstants {
   maxHp: number;
   maxStamina: number;
@@ -160,10 +192,28 @@ export interface CombatConstants {
   parryStaminaRefund: number;
   blockStaminaPerDamage: number;
   guardBreakTicks: number;
-  /** Passo curto (C andando/parado) e rolamento (C correndo). */
+  /** Pulo vale até N ticks depois de sair da borda (coyote time). */
+  coyoteTicks: number;
+  /** Travessias (Espaço perto de obstáculo baixo): pular por cima, deslizar no capô, subir. */
+  traverse: TraverseConstants;
+  /** Queda alta: correndo vira rolamento grátis; parado fica lento por um instante. */
+  landing: { rollMinFall: number; lagMinFall: number; lagSlowTicks: number };
+  /** Queda de ≥ minHeight atordoado/derrubado: dano e knockdown. */
+  fall: { minHeight: number; damage: number };
+  /** Golpe corpo a corpo: alcance vertical padrão para cima e para baixo (m). */
+  vReachUp: number;
+  vReachDown: number;
+  /** Magnetismo do golpe sem lock-on: gira e avança até o inimigo mais perto no cone. */
+  magnet: { range: number; coneDeg: number; maxExtraLunge: number };
+  /** Arremessado contra obstáculo com knockback forte: dano, atordoa. */
+  splat: { minSpeed: number; damage: number; stunTicks: number };
+  /** Pisão: só sai caindo de pelo menos `minHeight` acima do chão; bônus de dano por metro. */
+  plunge: { minHeight: number; bonusPerMeter: number };
+  /** Passo curto (C andando/parado), rolamento (C correndo) e rolamento de aterrissagem. */
   dodge: {
     step: DodgeDef;
     roll: DodgeDef;
+    land: DodgeDef;
     /** Esquiva perfeita: o golpe passou pelos i-frames até N ticks depois de começar a esquiva. */
     perfectWindow: number;
     perfectStaminaRefund: number;
@@ -273,5 +323,5 @@ export interface CombatData {
   constants: CombatConstants;
   weapons: Record<string, WeaponDef>;
   /** Golpes universais, independentes da arma. Voadora e cabeçada são de contexto. */
-  common: { kick: MoveDef; shove: MoveDef; voadora: MoveDef; cabecada: MoveDef };
+  common: { kick: MoveDef; shove: MoveDef; voadora: MoveDef; cabecada: MoveDef; pisao: MoveDef; carrinho: MoveDef };
 }

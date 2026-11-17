@@ -1,5 +1,6 @@
 import {
   attackPhase,
+  type Box,
   Buttons,
   createCombatData,
   createSim,
@@ -33,13 +34,21 @@ let showHitboxes = true;
 let stepOnce = false;
 const log: string[] = [];
 
+/** Cenário para afinar travessia, splat e pisão: carro, grade baixa, sofá e um muro. */
+const PROPS: Box[] = [
+  { x: 4, z: 0, hw: 0.95, hd: 2.2, h: 1.45, kind: 'carro', color: '#8b1e2d' },
+  { x: -4, z: 0, hw: 0.12, hd: 2.5, h: 1.1, kind: 'barreira', color: '#aab2bd' },
+  { x: 4, z: -4.5, hw: 1.15, hd: 0.45, h: 0.9, kind: 'movel', movel: 'sofa', color: '#555' },
+  { x: 0, z: 7, hw: 4, hd: 0.3, h: 2.5, kind: 'muro', color: '#7b7f86' },
+];
+
 function newSim(weaponA: string, weaponB: string): SimState {
   return createSim(
     [
       { id: 'voce', team: 0, pos: { x: 0, z: -1 }, facing: 0, weapon: weaponA },
       { id: 'boneco', team: 1, pos: { x: 0, z: 1 }, facing: Math.PI, weapon: weaponB },
     ],
-    { arenaHalfSize: 12 },
+    { arenaHalfSize: 12, collision: { boxes: PROPS, circles: [], halfW: 12, halfD: 12 } },
     data,
   );
 }
@@ -73,6 +82,12 @@ scene.add(ground);
 const grid = new THREE.GridHelper(24, 24, 0x3d4450, 0x323842);
 grid.position.y = 0.005;
 scene.add(grid);
+for (const b of PROPS) {
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(b.hw * 2, b.h, b.hd * 2), new THREE.MeshStandardMaterial({ color: b.color, roughness: 0.8 }));
+  mesh.position.set(b.x, b.h / 2, b.z);
+  mesh.castShadow = mesh.receiveShadow = true;
+  scene.add(mesh);
+}
 
 const views: FighterView[] = [
   createFighterView(scene, home.cores[0], home.cores[1]),

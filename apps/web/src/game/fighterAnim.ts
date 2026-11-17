@@ -26,7 +26,7 @@ export interface AnimPick {
   kick?: number;
 }
 
-type Snap = Pick<FighterSnapshot, 'state' | 'stateTick' | 'stateDuration' | 'y' | 'running' | 'dodgeKind'>;
+type Snap = Pick<FighterSnapshot, 'state' | 'stateTick' | 'stateDuration' | 'airborne' | 'running' | 'dodgeKind' | 'traverse'>;
 
 export const TICK_S = 1 / 60;
 
@@ -34,6 +34,7 @@ export const TICK_S = 1 / 60;
 export function attackClip(def: MoveDef): string {
   const weapon = def.id.split('.')[0] ?? 'punhos';
   if (def.id === 'voadora') return 'Jump_Loop';
+  if (def.shot) return 'Pistol_Shoot';
   if (def.kind === 'kick') return 'Idle_Loop';
   if (def.kind === 'shove' || def.id === 'cabecada') return 'Shield_OneShot';
   const unarmed = weapon === 'punhos' || weapon === 'soqueira';
@@ -72,6 +73,14 @@ export function pickAnim(f: Snap, def: MoveDef | undefined, speed: number, clips
   switch (f.state) {
     case 'attack': {
       if (!def) break;
+      // Pisão: encolhido no ar até tocar o chão, depois a aterrissagem pesada.
+      if (def.plunge) return t <= def.startup ? { clip: 'Jump_Loop', speed: 1 } : at('NinjaJump_Land', prog(t - def.startup, def.active + def.recovery));
+      // Carrinho: entra deslizando, desliza no ativo e levanta na recuperação.
+      if (def.lowProfile) {
+        if (t <= def.startup) return at('Slide_Start', prog(t, def.startup));
+        if (t <= def.startup + def.active) return { clip: 'Slide_Loop', speed: 1 };
+        return at('Slide_Exit', prog(t - def.startup - def.active, def.recovery));
+      }
       const clip = attackClip(def);
       if (def.multiHit && def.kind === 'special') {
         // Socos alternados: jab/direto a cada segmento do multi-hit.
@@ -97,7 +106,13 @@ export function pickAnim(f: Snap, def: MoveDef | undefined, speed: number, clips
       return at('Sword_Block', 0.45);
     case 'dodge':
       // A esquiva entra sem duração no estado: o tempo vem das constantes (senão o clipe pula pro fim).
-      return f.dodgeKind === 'roll' ? at('Roll', prog(t, DODGE.roll.duration)) : { clip: 'Crouch_Idle_Loop', speed: 1 };
+      return f.dodgeKind === 'step' ? { clip: 'Crouch_Idle_Loop', speed: 1 } : at('Roll', prog(t, DODGE[f.dodgeKind].duration));
+    case 'traverse': {
+      const k = prog(t, f.stateDuration);
+      if (f.traverse === 'subir') return at('ClimbUp_1m', k);
+      if (f.traverse === 'capo') return k < 0.3 ? at('Slide_Start', k / 0.3) : k < 0.7 ? { clip: 'Slide_Loop', speed: 1 } : at('Slide_Exit', (k - 0.7) / 0.3);
+      return k < 0.5 ? at('NinjaJump_Start', k * 2) : at('NinjaJump_Land', (k - 0.5) * 2);
+    }
     case 'hitstun':
       return at(f.stateDuration % 2 ? 'Hit_Head' : 'Hit_Chest', prog(t, f.stateDuration));
     case 'staggered':
@@ -125,7 +140,8 @@ export function pickAnim(f: Snap, def: MoveDef | undefined, speed: number, clips
     default:
       break;
   }
-  if (f.y > 0.02) return { clip: 'Jump_Loop', speed: 1 };
+  // No ar em relação ao chão debaixo do pé: em cima do carro é chão.
+  if (f.airborne) return { clip: 'Jump_Loop', speed: 1 };
   // Locomoção: velocidade do clipe acompanha a do boneco para o pé não patinar.
   if (speed < 0.3) return { clip: 'Idle_Loop', speed: 1 };
   if (f.running) return { clip: 'Sprint_Loop', speed: Math.max(0.6, speed / 6.5) };
