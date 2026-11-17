@@ -31,9 +31,17 @@ export function Crest({ torcida, size = 40 }: { torcida: Torcida; size?: number 
 /** Cor clara da torcida para luzes e faixas (o preto da Cearalove sumiria no fundo escuro). */
 export function teamGlow(t: Torcida): string {
   const [a, b] = t.cores;
-  const n = parseInt(a.slice(1), 16);
-  const luma = (0.2126 * ((n >> 16) & 255) + 0.7152 * ((n >> 8) & 255) + 0.0722 * (n & 255)) / 255;
-  return luma < 0.15 ? b : a;
+  return luma(a) < 0.15 ? b : a;
+}
+
+/** Cor de texto legível sobre um fundo #rrggbb. */
+export function inkOn(hex: string): string {
+  return luma(hex) > 0.5 ? '#111111' : '#ffffff';
+}
+
+function luma(hex: string): number {
+  const n = parseInt(hex.slice(1), 16);
+  return (0.2126 * ((n >> 16) & 255) + 0.7152 * ((n >> 8) & 255) + 0.0722 * (n & 255)) / 255;
 }
 
 export function teamOf(team: 0 | 1): Torcida {

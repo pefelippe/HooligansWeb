@@ -190,6 +190,7 @@ export function App() {
       error={error}
       onPlay={play}
       onEdit={setEditing}
+      onVisualSaved={load}
       onSignOut={signOut}
       onEnterRoom={(r) => {
         setError(null);

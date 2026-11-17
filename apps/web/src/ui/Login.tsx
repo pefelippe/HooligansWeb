@@ -2,7 +2,7 @@ import { randomVisual, TORCIDAS } from '@torcidas/shared';
 import { useEffect, useState } from 'react';
 import { authClient } from '../api';
 import { CharacterPreview } from './CharacterPreview';
-import { GoogleButton } from './kit';
+import { GoogleButton, inkOn, teamGlow } from './kit';
 import './screens.css';
 
 // O Google volta para cá; em caso de erro o Better Auth acrescenta ?error=<código>.
@@ -46,18 +46,24 @@ export function Login({ initialError }: { initialError: string | null }) {
       <header className="ln-top">
         <span className="ln-mark">T</span>
         <span className="ln-tag">Alfa · Fortaleza</span>
+        <span className="ln-tag ln-tag-end">10 × 10 · direto no navegador</span>
       </header>
 
       <section className="ln-stage">
         <h1 className="ln-word">Torcidas</h1>
+        {/* Faixa das duas torcidas atrás dos lutadores. */}
+        <div className="ln-band" aria-hidden="true">
+          <i style={{ background: `repeating-linear-gradient(90deg, ${a.cores[0]} 0 34px, ${a.cores[1]} 34px 68px)` }} />
+          <i style={{ background: `linear-gradient(180deg, ${b.cores[0]} 50%, ${b.cores[1]} 50%)` }} />
+        </div>
         <figure className="ln-fighter left">
           <CharacterPreview team={0} visual={LEFT} facing={0.55} still className="ln-canvas" />
-          <figcaption style={{ ['--c' as string]: a.cores[1] }}>{a.nome}</figcaption>
+          <figcaption style={{ ['--c' as string]: teamGlow(a), ['--ink' as string]: inkOn(teamGlow(a)) }}>{a.nome}</figcaption>
         </figure>
         <span className="ln-x" aria-hidden="true">×</span>
         <figure className="ln-fighter right">
           <CharacterPreview team={1} visual={RIGHT} facing={-0.55} still className="ln-canvas" />
-          <figcaption style={{ ['--c' as string]: b.cores[1] }}>{b.nome}</figcaption>
+          <figcaption style={{ ['--c' as string]: teamGlow(b), ['--ink' as string]: inkOn(teamGlow(b)) }}>{b.nome}</figcaption>
         </figure>
       </section>
 

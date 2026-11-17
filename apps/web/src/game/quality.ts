@@ -2,7 +2,10 @@
 // (ligar/desligar sombra recompila os shaders; ficar alternando seria pior que o FPS baixo).
 // shortcut: não sobe de volta; se jogadores reclamarem de qualidade presa, adicionar subida com histerese longa.
 
+// pixelRatio é a escala de render, mesmo acima da tela: 2 numa tela comum é supersampling (antisserrilhado
+// também dentro das peças, onde o MSAA não chega: faixas do toon, bordas pintadas de camisa e barba).
 export const QUALITY_LEVELS = [
+  { pixelRatio: 2, shadows: true },
   { pixelRatio: 1.5, shadows: true },
   { pixelRatio: 1, shadows: true },
   { pixelRatio: 1, shadows: false },

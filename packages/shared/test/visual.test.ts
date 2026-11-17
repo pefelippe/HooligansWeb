@@ -17,6 +17,20 @@ describe('visual do personagem', () => {
     expect(validateVisual([])).toBeNull();
   });
 
+  it('altura, peso e músculos: inteiros dentro da faixa', () => {
+    expect(validateVisual({ altura: 110, peso: 100, musculo: 0 })).toEqual({ ...DEFAULT_VISUAL, altura: 110, peso: 100, musculo: 0 });
+    expect(validateVisual({ altura: 109 })).toBeNull();
+    expect(validateVisual({ altura: 201 })).toBeNull();
+    expect(validateVisual({ peso: 50.5 })).toBeNull();
+    expect(validateVisual({ musculo: '50' })).toBeNull();
+    expect(validateVisual({ peso: Number.NaN })).toBeNull();
+  });
+
+  it('converte perfis antigos (corpo e altura como opção)', () => {
+    expect(validateVisual({ altura: 'alto', corpo: 'forte' })).toEqual({ ...DEFAULT_VISUAL, altura: 198, peso: 55, musculo: 85 });
+    expect(validateVisual({ corpo: 'gigante' })).toBeNull();
+  });
+
   it('aleatório é sempre válido e determinístico pelo seed', () => {
     for (let seed = 0; seed < 200; seed++) {
       const v = randomVisual(seed);

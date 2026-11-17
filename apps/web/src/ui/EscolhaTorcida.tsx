@@ -2,17 +2,14 @@ import {
   type CharacterVisual,
   getTorcida,
   NICK_MAX,
-  randomVisual,
   TORCIDAS,
   validateNick,
-  VISUAL_KEYS,
-  VISUAL_OPTIONS,
-  type VisualKey,
 } from '@torcidas/shared';
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { CharacterPreview } from './CharacterPreview';
 import { Crest } from './kit';
+import { saveVisual as putVisual, VisualEditor, type VisualTab } from './VisualEditor';
 
 interface Props {
   user: { name: string; image: string | null };
@@ -39,17 +36,6 @@ const NICK_ERRORS: Record<string, string> = {
 
 type Step = 'torcida' | 'nick' | 'visual';
 
-const VISUAL_LABELS: Record<VisualKey, string> = {
-  pele: 'Pele',
-  cabelo: 'Cabelo',
-  corCabelo: 'Cor do cabelo',
-  barba: 'Barba',
-  corpo: 'Corpo',
-  altura: 'Altura',
-  camisa: 'Camisa',
-  acessorio: 'Acessório',
-};
-
 type Check =
   | { status: 'idle' | 'checking' | 'ok' }
   | { status: 'error'; error: string; suggestions: string[] };
@@ -64,6 +50,7 @@ interface CheckResult {
 export function EscolhaTorcida({ user, initialNick, initialTorcida, initialVisual, startStep, onSaved, onCancel, notice }: Props) {
   const [step, setStep] = useState<Step>(startStep ?? (initialTorcida ? 'nick' : 'torcida'));
   const [visual, setVisual] = useState(initialVisual);
+  const [tab, setTab] = useState<VisualTab>('corpo');
   /** Perfil (torcida + nick) já gravado: libera a etapa do visual. */
   const [profileSaved, setProfileSaved] = useState(!!onCancel);
   const [torcidaId, setTorcidaId] = useState(initialTorcida ?? '');
@@ -125,15 +112,10 @@ export function EscolhaTorcida({ user, initialNick, initialTorcida, initialVisua
     if (saving) return;
     setSaveError(null);
     setSaving(true);
-    try {
-      await api('/profile/visual', { method: 'PUT', body: JSON.stringify({ visual }) });
-      onSaved();
-    } catch (e) {
-      const code = (e as Error).message;
-      setSaveError(code === 'visual_invalido' ? 'Visual inválido' : code);
-    } finally {
-      setSaving(false);
-    }
+    const err = await putVisual(visual);
+    setSaving(false);
+    if (err) setSaveError(err);
+    else onSaved();
   }
 
   return (
@@ -272,40 +254,9 @@ export function EscolhaTorcida({ user, initialNick, initialTorcida, initialVisua
         torcida && (
           <section className="profile-card visual-card">
             <div className="visual-stage">
-              <CharacterPreview team={torcida.team} visual={visual} />
-              <button className="secondary" onClick={() => setVisual(randomVisual(Math.floor(Math.random() * 2 ** 31)))}>
-                Aleatório
-              </button>
+              <CharacterPreview team={torcida.team} visual={visual} framing={tab !== 'corpo' ? 'head' : 'body'} />
             </div>
-            <div className="visual-options">
-              {VISUAL_KEYS.map((k) => (
-                <div key={k} className="vopt">
-                  <span>{VISUAL_LABELS[k]}</span>
-                  <div className="vchoices" role="radiogroup" aria-label={VISUAL_LABELS[k]}>
-                    {VISUAL_OPTIONS[k].map((o) => {
-                      const on = visual[k] === o.id;
-                      const pick = () => setVisual((v) => ({ ...v, [k]: o.id }));
-                      return 'cor' in o ? (
-                        <button
-                          key={o.id}
-                          role="radio"
-                          aria-checked={on}
-                          aria-label={o.nome}
-                          title={o.nome}
-                          className={`swatch ${on ? 'on' : ''}`}
-                          style={{ background: o.cor }}
-                          onClick={pick}
-                        />
-                      ) : (
-                        <button key={o.id} role="radio" aria-checked={on} className={`chip ${on ? 'on' : ''}`} onClick={pick}>
-                          {o.nome}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-            </div>
+            <VisualEditor visual={visual} onChange={setVisual} tab={tab} onTab={setTab} />
             <button className="primary big" disabled={saving} onClick={saveVisual}>
               {saving ? 'Salvando…' : onCancel ? 'Salvar visual' : 'Entrar na torcida'}
             </button>

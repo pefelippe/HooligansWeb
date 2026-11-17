@@ -12,7 +12,17 @@ interface Props {
   className?: string;
   /** Sem arrastar (decorativo). */
   still?: boolean;
+  /** Enquadramento: corpo inteiro ou rosto (editando cabelo, barba, acessório). */
+  framing?: 'body' | 'head';
 }
+
+// Câmera (posição e alvo) de cada enquadramento; a troca desliza.
+const BODY = { pos: new THREE.Vector3(0, 1.25, 3.9), look: new THREE.Vector3(0, 1, 0) }; // cabe 2,00 m de pé
+/** Altura da cabeça acompanha a altura do visual (o modelo tem 1,75 m). */
+const headFrame = (altura: number) => ({
+  pos: new THREE.Vector3(0, (1.72 * altura) / 175, 1.35),
+  look: new THREE.Vector3(0, (1.68 * altura) / 175, 0),
+});
 
 interface Stage {
   scene: THREE.Scene;
@@ -21,12 +31,14 @@ interface Stage {
 }
 
 /** Prévia 3D do personagem: o mesmo boneco da partida, em guarda, girando (arraste para girar). */
-export function CharacterPreview({ team, visual, facing, className, still }: Props) {
+export function CharacterPreview({ team, visual, facing, className, still, framing = 'body' }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stage = useRef<Stage | null>(null);
   const yaw = useRef(facing ?? 0.5);
   const spin = useRef(facing === undefined);
   const dragging = useRef<number | null>(null);
+  const frame = useRef(BODY);
+  frame.current = framing === 'head' ? headFrame(visual.altura) : BODY;
   const [model, setModel] = useState(() => fighterAsset() !== null);
 
   useEffect(() => {
@@ -42,7 +54,8 @@ export function CharacterPreview({ team, visual, facing, className, still }: Pro
     const canvas = canvasRef.current;
     if (!canvas) return;
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
-    renderer.setPixelRatio(Math.min(2, window.devicePixelRatio));
+    // Um boneco só: dá para renderizar a 2–3× e suavizar as bordas pintadas e do toon.
+    renderer.setPixelRatio(Math.min(3, Math.max(2, window.devicePixelRatio * 1.5)));
     const scene = new THREE.Scene();
     scene.add(new THREE.HemisphereLight(0xdfe8ff, 0x2a2118, 1.6));
     const key = new THREE.DirectionalLight(0xffffff, 2.2);
@@ -52,8 +65,9 @@ export function CharacterPreview({ team, visual, facing, className, still }: Pro
     floor.rotation.x = -Math.PI / 2;
     scene.add(floor);
     const camera = new THREE.PerspectiveCamera(32, 1, 0.1, 20);
-    camera.position.set(0, 1.25, 3.6);
-    camera.lookAt(0, 0.98, 0);
+    camera.position.copy(frame.current.pos);
+    const look = frame.current.look.clone();
+    camera.lookAt(look);
     // Lutador parado em guarda: o snapshot inicial da simulação.
     const sim = createSim([{ id: 'preview', team: 0, pos: { x: 0, z: 0 }, facing: 0 }]);
     stage.current = { scene, view: null, snap: toSnapshot(sim, sim.fighters[0]!) };
@@ -69,16 +83,19 @@ export function CharacterPreview({ team, visual, facing, className, still }: Pro
 
     let raf = 0;
     let last = performance.now();
-    const frame = (now: number) => {
-      raf = requestAnimationFrame(frame);
+    const tick = (now: number) => {
+      raf = requestAnimationFrame(tick);
       const dt = Math.min(0.1, (now - last) / 1000);
       last = now;
       if (dragging.current === null && spin.current) yaw.current += dt * 0.6;
+      const k = 1 - Math.exp(-dt * 8);
+      camera.position.lerp(frame.current.pos, k);
+      camera.lookAt(look.lerp(frame.current.look, k));
       const st = stage.current;
       st?.view?.update({ ...st.snap, facing: yaw.current }, camera, dt);
       renderer.render(scene, camera);
     };
-    raf = requestAnimationFrame(frame);
+    raf = requestAnimationFrame(tick);
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();

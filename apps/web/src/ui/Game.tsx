@@ -1,7 +1,7 @@
 import { BANDAGEM, BOMBA, COLETE, CURATIVO, DEFAULT_COMBAT_DATA, GAS, type MatchResult, matchXp, type ShopCategory, shopItems, TORCIDAS, type WeaponDef } from '@torcidas/shared';
 import { useEffect, useRef, useState } from 'react';
 import { GameEngine, type HudState } from '../game/engine';
-import { Crest, ItemIcon, Key, Meter, teamGlow } from './kit';
+import { Crest, inkOn, ItemIcon, Key, Meter, teamGlow } from './kit';
 import './hud.css';
 import './screens.css';
 
@@ -267,13 +267,24 @@ export function Game({ serverUrl, ticket, onExit, onReconnect }: Props) {
 
       {/* Topo: placar de transmissão + pontos de controle */}
       {hud?.match && (
-        <div className="h-top">
+        <div
+          className="h-top"
+          style={{
+            ['--ally' as string]: teamGlow(TORCIDAS[team]),
+            ['--ally-ink' as string]: inkOn(teamGlow(TORCIDAS[team])),
+            ['--enemy' as string]: teamGlow(TORCIDAS[team === 0 ? 1 : 0]),
+            ['--enemy-ink' as string]: inkOn(teamGlow(TORCIDAS[team === 0 ? 1 : 0])),
+          }}
+        >
           <div className="h-score">
             {([0, 1] as const).map((t) => (
               <div key={t} className={`h-team ${t === 0 ? 'left' : 'right'} ${team === t ? 'mine' : ''}`} style={{ ['--tc' as string]: teamGlow(TORCIDAS[t]) }}>
                 <Crest torcida={TORCIDAS[t]} size={22} />
                 <div className="h-team-mid">
-                  <span>{TORCIDAS[t].nome}</span>
+                  <span>
+                    {TORCIDAS[t].nome}
+                    {team === t && <small> · você</small>}
+                  </span>
                   <div className="h-pips" title="De pé / no chão">
                     {hud.fighters
                       .filter((f) => f.team === t)
@@ -312,6 +323,15 @@ export function Game({ serverUrl, ticket, onExit, onReconnect }: Props) {
                 );
               })}
             </div>
+          )}
+          {hud.match.points.some((p) => p.contested) && (
+            <small className="h-contested">
+              {hud.match.points
+                .filter((p) => p.contested)
+                .map((p) => p.id)
+                .join(', ')}{' '}
+              em disputa
+            </small>
           )}
         </div>
       )}
