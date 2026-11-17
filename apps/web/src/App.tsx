@@ -1,17 +1,17 @@
-import { type CharacterVisual, getTorcida, randomVisual, sanitizeNick, TORCIDAS, validateVisual, visualSeed } from '@torcidas/shared';
+import { type CharacterVisual, getTorcida, randomVisual, sanitizeNick, validateVisual, visualSeed } from '@torcidas/shared';
 import { useCallback, useEffect, useState } from 'react';
 import { api, authClient } from './api';
 import { EscolhaTorcida } from './ui/EscolhaTorcida';
 import { Game } from './ui/Game';
-import { Crest, Key } from './ui/kit';
+import { Home } from './ui/Home';
 import { Lobby } from './ui/Lobby';
 import { Login } from './ui/Login';
-import { type RoomEntry, roomError, Rooms } from './ui/Rooms';
+import { type RoomEntry, roomError } from './ui/Rooms';
 
 interface Me {
   user: { id: string; name: string; image: string | null; anonymous: boolean };
   profile: { nick: string; torcidaId: string; visual: Partial<CharacterVisual> } | null;
-  stats: { matches: number; wins: number; kos: number; deaths: number; assists: number } | null;
+  stats: { matches: number; wins: number; kos: number; deaths: number; assists: number; xp: number } | null;
 }
 
 const INVITE_KEY = 'torcidas.convite';
@@ -174,95 +174,22 @@ export function App() {
       />
     );
   }
-  const s = me.stats;
-  const rival = TORCIDAS[t.team === 0 ? 1 : 0];
   return (
-    <main className="screen home">
-      <header className="brand">
-        <h1>Torcidas</h1>
-        <p>Briga 10×10 no estacionamento do estádio</p>
-      </header>
-
-      <section className="versus">
-        <div className={`vs-side ${t.team === 0 ? 'mine' : ''}`}>
-          <Crest torcida={TORCIDAS[0]} size={72} />
-          <b>{TORCIDAS[0].nome}</b>
-        </div>
-        <span className="vs">×</span>
-        <div className={`vs-side ${t.team === 1 ? 'mine' : ''}`}>
-          <Crest torcida={TORCIDAS[1]} size={72} />
-          <b>{TORCIDAS[1].nome}</b>
-        </div>
-      </section>
-
-      <section className="profile-card">
-        <div className="profile-id">
-          <Crest torcida={t} size={44} />
-          <div>
-            <b>{me.profile.nick}</b>
-            <small>
-              {t.nome} · contra {rival.nome}
-            </small>
-          </div>
-          <button className="ghost" onClick={() => setEditing('visual')}>
-            Visual
-          </button>
-          <button className="ghost" onClick={() => setEditing('nick')}>
-            Editar
-          </button>
-        </div>
-        <div className="stats">
-          <div>
-            <b>{s?.matches ?? 0}</b>
-            <small>Partidas</small>
-          </div>
-          <div>
-            <b>{s?.wins ?? 0}</b>
-            <small>Vitórias</small>
-          </div>
-          <div>
-            <b>{s?.kos ?? 0}</b>
-            <small>Nocautes</small>
-          </div>
-          <div>
-            <b>{s && s.deaths > 0 ? (s.kos / s.deaths).toFixed(2) : (s?.kos ?? 0)}</b>
-            <small>K/M</small>
-          </div>
-        </div>
-        <button className="primary big" onClick={play} disabled={joining}>
-          {joining ? 'Entrando…' : 'Jogar'}
-        </button>
-        {error && <p className="banner danger">{error}</p>}
-        <div className="account">
-          {me.user.image && <img src={me.user.image} alt="" referrerPolicy="no-referrer" />}
-          <span>{me.user.name}</span>
-          <button className="ghost" onClick={signOut}>
-            Sair
-          </button>
-        </div>
-      </section>
-
-      <Rooms
-        onEnter={(r) => {
-          setError(null);
-          setRoom(r);
-        }}
-      />
-
-      <footer className="home-tips">
-        <span>
-          <Key>F</Key> no tempo certo = parry
-        </span>
-        <span>
-          <Key>C</Key> no último instante = esquiva perfeita
-        </span>
-        <span>
-          <Key>R</Key> especial com a barra de Raça
-        </span>
-        <span>
-          <Key>X</Key> levanta o parceiro caído
-        </span>
-      </footer>
-    </main>
+    <Home
+      user={me.user}
+      nick={me.profile.nick}
+      torcida={t}
+      visual={(Object.keys(me.profile.visual).length ? validateVisual(me.profile.visual) : null) ?? randomVisual(visualSeed(me.user.id))}
+      stats={me.stats}
+      joining={joining}
+      error={error}
+      onPlay={play}
+      onEdit={setEditing}
+      onSignOut={signOut}
+      onEnterRoom={(r) => {
+        setError(null);
+        setRoom(r);
+      }}
+    />
   );
 }

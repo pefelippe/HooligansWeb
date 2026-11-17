@@ -11,16 +11,27 @@ import {
   visualSeed,
 } from '@torcidas/shared';
 import * as THREE from 'three';
+import { pickAnim } from './fighterAnim';
+import { bodyMaterial, fighterAsset, SkinnedFighter } from './fighterModel';
 
 // Boneco humano procedural com juntas (quadril/joelho, ombro/cotovelo). A pose alvo é
 // função pura do estado da simulação (estado, stateTick, frame data) e as juntas
 // interpolam até ela, então a animação segue o tick e as transições ficam suaves.
-// TODO(polimento): trocar por glTF rigado (Quaternius/Mixamo) mantendo esta mesma lógica de pose.
+// Com o modelo glTF carregado (fighterModel.ts), o corpo vira o do Quaternius e os clipes seguem o
+// mesmo estado/frame data (fighterAnim.ts); este boneco fica de reserva se o modelo não carregar.
 
 const data = DEFAULT_COMBAT_DATA;
 /** Altura e largura do tronco/ombros por opção do visual. */
-const HEIGHT = { baixo: 0.93, medio: 1, alto: 1.07 } as const;
-const BUILD = { magro: { torso: 0.86, shoulder: 0.215, hip: 0.09 }, normal: { torso: 1, shoulder: 0.235, hip: 0.095 }, forte: { torso: 1.17, shoulder: 0.262, hip: 0.1 } } as const;
+const HEIGHT = { baixo: 0.88, medio: 1, alto: 1.13 } as const;
+/** Grossura dos braços (escala do osso do braço no glTF). */
+const ARMS = { magro: 0.88, normal: 1, forte: 1.18 } as const;
+/** Grupo da cabeça e da mão presos aos ossos do glTF (afinado por screenshot). */
+const HEAD_FIT = { offset: new THREE.Vector3(0, 0, 0), scale: 0.9 };
+const HAND_FIT = {
+  offset: new THREE.Vector3(-0.08, 0, 0),
+  quat: new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(new THREE.Vector3(0, -1, 0), new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, 1))),
+};
+const BUILD = { magro: { torso: 0.84, shoulder: 0.215, hip: 0.09 }, normal: { torso: 1, shoulder: 0.235, hip: 0.095 }, forte: { torso: 1.24, shoulder: 0.262, hip: 0.1 } } as const;
 
 interface Pose {
   hipL: number;
@@ -75,7 +86,69 @@ function hash(s: string): number {
   return Math.abs(h);
 }
 
-const mat = (color: THREE.ColorRepresentation, roughness = 0.75) => new THREE.MeshStandardMaterial({ color, roughness });
+// Sombreamento em 3 faixas (estilo desenho). Uma textura só para todos os bonecos.
+const TOON_RAMP = new THREE.DataTexture(new Uint8Array([95, 95, 95, 255, 175, 175, 175, 255, 255, 255, 255, 255]), 3, 1);
+TOON_RAMP.minFilter = TOON_RAMP.magFilter = THREE.NearestFilter;
+TOON_RAMP.needsUpdate = true;
+
+const mat = (color: THREE.ColorRepresentation) => new THREE.MeshToonMaterial({ color, gradientMap: TOON_RAMP });
+
+/** Espessura do contorno (m), empurrando os vértices pela normal. */
+const OUTLINE_WIDTH = 0.012;
+function outlineMaterial(color: number): THREE.MeshBasicMaterial {
+  const m = new THREE.MeshBasicMaterial({ color, side: THREE.BackSide });
+  m.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>\ntransformed += normal * ${OUTLINE_WIDTH};`);
+  };
+  return m;
+}
+// Compartilhados entre bonecos: inimigo com contorno vinho, você e aliados com contorno escuro.
+const OUTLINE_ALLY = outlineMaterial(0x0d1117);
+const OUTLINE_ENEMY = outlineMaterial(0x8f1426);
+/** Só peças grandes ganham contorno (juntas, olhos e dedos não), para não dobrar as draw calls. */
+const OUTLINE_MIN_RADIUS = 0.09;
+
+/** Camisa: cor da torcida, escudo no peito (u=0 é o +Z, a frente) e número + nick nas costas (u=0.5). */
+function jerseyTexture(shirt: string, trim: string, number: number, nick: string): THREE.CanvasTexture {
+  const c = document.createElement('canvas');
+  c.width = 512;
+  c.height = 256;
+  const g = c.getContext('2d');
+  if (g) {
+    g.fillStyle = shirt;
+    g.fillRect(0, 0, c.width, c.height);
+    const stroke = new THREE.Color(trim).getHSL({ h: 0, s: 0, l: 0 }).l > 0.8 ? '#000000' : trim;
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.lineJoin = 'round';
+    g.fillStyle = '#f5f5f5';
+    g.strokeStyle = stroke;
+    if (nick) {
+      g.font = '700 26px "Barlow Condensed", Inter, sans-serif';
+      g.lineWidth = 5;
+      g.strokeText(nick.toUpperCase(), 256, 62);
+      g.fillText(nick.toUpperCase(), 256, 62);
+    }
+    g.font = '800 104px "Barlow Condensed", Inter, sans-serif';
+    g.lineWidth = 10;
+    g.strokeText(String(number), 256, 140);
+    g.fillText(String(number), 256, 140);
+    // Escudo pequeno no peito: desenhado nas duas bordas, que se encontram na frente.
+    for (const cx of [0, 512]) {
+      g.fillStyle = trim;
+      g.beginPath();
+      g.moveTo(cx - 16, 70);
+      g.lineTo(cx + 16, 70);
+      g.lineTo(cx + 16, 92);
+      g.quadraticCurveTo(cx, 112, cx - 16, 92);
+      g.closePath();
+      g.fill();
+    }
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
 
 /** Segmento de membro pendurado para baixo a partir da junta. */
 function segment(len: number, rTop: number, rBot: number, m: THREE.Material): THREE.Mesh {
@@ -92,11 +165,26 @@ function joint(r: number, m: THREE.Material): THREE.Mesh {
   return mesh;
 }
 
+const THROW_CLIP = 'Spell_Simple_Shoot';
+const _gp = new THREE.Vector3();
+const _gq = new THREE.Quaternion();
+const _gs = new THREE.Vector3();
+const _gm = new THREE.Matrix4();
+const _gw = new THREE.Matrix4();
+const THROW_SECS = 0.45;
+
 export class CharacterView {
   readonly root = new THREE.Group();
   private readonly yawG = new THREE.Group();
   private readonly fallG = new THREE.Group();
   private readonly rollG = new THREE.Group();
+  private readonly vest = new THREE.Group();
+  /**
+   * Arma do boneco skinned: fora da hierarquia do modelo, que é alargado só em X/Z (corpo forte/magro).
+   * Presa ao osso, essa escala desigual entortava a arma quando o braço girava e ela saía do punho.
+   * A cada quadro copia só posição e rotação da mão (handR fica no osso como âncora).
+   */
+  private readonly grip = new THREE.Group();
   private readonly pelvis = new THREE.Group();
   private readonly spine = new THREE.Group();
   private readonly head = new THREE.Group();
@@ -110,8 +198,17 @@ export class CharacterView {
   private readonly elR = new THREE.Group();
   private readonly handR = new THREE.Group();
   private readonly weapon = new THREE.Group();
-  private readonly shirtMat: THREE.MeshStandardMaterial;
-  private readonly allMats: THREE.MeshStandardMaterial[] = [];
+  private readonly shirtMat: THREE.MeshToonMaterial;
+  /** Tronco com número e nick (textura própria; o resto da camisa usa `shirtMat`). */
+  private readonly jerseyMat: THREE.MeshToonMaterial;
+  private readonly jerseyTex: THREE.CanvasTexture;
+  /** Corpo glTF; null = boneco procedural. */
+  private readonly skinned: SkinnedFighter | null;
+  private readonly allMats: THREE.MeshToonMaterial[] = [];
+  private readonly outlines: THREE.Mesh[] = [];
+  /** Contorno próprio do boneco glTF: muda de cor para mostrar armadura e contra-golpe. */
+  private outlineMat: THREE.MeshBasicMaterial | null = null;
+  private outlineBase = 0;
   private readonly guard: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
   private readonly aura: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
   private readonly label: THREE.Sprite;
@@ -123,6 +220,11 @@ export class CharacterView {
   private readonly shirtColor: THREE.Color;
   private pose: Pose = { ...GUARD };
   private walkPhase = 0;
+  /** Yaw desenhado e velocidade suavizados (a simulação vira e acelera na hora; o boneco não pode piscar). */
+  private visYaw = Number.NaN;
+  private speedEma = 0;
+  /** Segundos que ainda faltam do gesto de arremesso (vem do evento, não do estado). */
+  private throwT = 0;
   private lastPos = new THREE.Vector2(Number.NaN, Number.NaN);
   private velLocal = new THREE.Vector2();
   private weaponId = '';
@@ -146,126 +248,186 @@ export class CharacterView {
     const t = TORCIDAS[team];
     this.shirtColor = new THREE.Color(t.cores[0]);
     const trim = new THREE.Color(t.cores[1]);
-    const skin = mat(visualColor('pele', v.pele), 0.6);
-    this.shirtMat = mat(this.shirtColor, 0.85);
-    const trimMat = mat(trim, 0.85);
-    const shorts = mat(team === 0 ? 0x111111 : 0xf5f5f5, 0.85);
-    const socks = mat(team === 0 ? 0x111111 : 0xe30613, 0.9);
-    const shoes = mat([0xf2f2f2, 0x1a1a1a, 0x2d4a8a, 0xb5352b][(h >> 3) % 4] ?? 0x1a1a1a, 0.5);
-    const hair = mat(visualColor('corCabelo', v.corCabelo), 0.9);
-    const eyeMat = mat(0x111111, 0.3);
-    this.allMats.push(skin, this.shirtMat, trimMat, shorts, socks, shoes, hair, eyeMat);
-    const scale = HEIGHT[v.altura];
+    const skin = mat(visualColor('pele', v.pele));
+    this.shirtMat = mat(this.shirtColor);
+    const trimMat = mat(trim);
+    const shorts = mat(team === 0 ? 0x111111 : 0xf5f5f5);
+    const socks = mat(team === 0 ? 0x111111 : 0xe30613);
+    const shoes = mat([0xf2f2f2, 0x1a1a1a, 0x2d4a8a, 0xb5352b][(h >> 3) % 4] ?? 0x1a1a1a);
+    const hair = mat(visualColor('corCabelo', v.corCabelo));
+    const eyeMat = mat(0x111111);
+    const asset = fighterAsset();
+    this.jerseyTex = jerseyTexture(t.cores[0], t.cores[1], (h % 98) + 1, nick);
+    this.jerseyMat = asset
+      ? bodyMaterial(
+          { skin: skin.color, shorts: shorts.color, socks: socks.color, shoes: shoes.color, trim, jersey: this.jerseyTex, sleeve: v.camisa === 'regata' ? 0.21 : 0.36, stripes: v.camisa === 'listrada' },
+          TOON_RAMP,
+        )
+      : new THREE.MeshToonMaterial({ map: this.jerseyTex, gradientMap: TOON_RAMP });
+    this.allMats.push(skin, this.shirtMat, this.jerseyMat, trimMat, shorts, socks, shoes, hair, eyeMat);
+    // Altura da opção com um pouco de sorteio por lutador (±4%), para ninguém ficar igual.
+    const scale = HEIGHT[v.altura] * (1 + (((h >> 9) % 9) - 4) * 0.01);
     const build = BUILD[v.corpo];
     // Regata: ombro e braço de fora (pele) em vez da manga da camisa.
     const sleeve = v.camisa === 'regata' ? skin : this.shirtMat;
 
-    // Hierarquia: root(pos) > yaw > fall (pivô nos pés) > roll > pelvis > (spine > cabeça, ombros) + quadris.
-    this.root.add(this.yawG);
-    this.yawG.add(this.fallG);
-    this.fallG.add(this.rollG);
-    this.rollG.position.y = 0.55;
-    this.rollG.add(this.pelvis);
-    this.pelvis.position.y = 0.4; // quadril a ~0.95 m
-    this.yawG.scale.setScalar(scale);
+    if (asset) {
+      this.outlineBase = allied ? OUTLINE_ALLY.color.getHex() : OUTLINE_ENEMY.color.getHex();
+      this.outlineMat = outlineMaterial(this.outlineBase);
+      const sk = new SkinnedFighter(asset, this.jerseyMat, hair, eyeMat, this.outlineMat, build.torso);
+      for (const b of ['upperarm_l', 'upperarm_r']) sk.bone(b)?.scale.setScalar(ARMS[v.corpo]);
+      this.skinned = sk;
+      // Cabeça: o grupo procedural (cabelo, barba, boné) vai preso ao osso, de pé e olhando para +Z.
+      sk.mount('Head', this.head, sk.restPos('Head').add(HEAD_FIT.offset), new THREE.Quaternion());
+      this.head.scale.setScalar(HEAD_FIT.scale);
+      this.buildHair(v, hair);
+      this.buildBeard(v, hair);
+      this.buildHeadwear(v, trimMat);
+      // Colete: preso ao peito, aparece quando o lutador tem pontos de colete.
+      const vestMat = mat(0x3d4630);
+      this.allMats.push(vestMat);
+      const vestG = new THREE.CylinderGeometry(0.2, 0.18, 0.4, 14);
+      const vest = new THREE.Mesh(vestG, vestMat);
+      vest.scale.z = 0.72;
+      vest.castShadow = true;
+      this.vest.add(vest);
+      this.vest.visible = false;
+      sk.mount('spine_03', this.vest, sk.restPos('spine_03').add(new THREE.Vector3(0, 0.0, 0.02)), new THREE.Quaternion());
+      // Mão: o -Y do grupo segue o osso até os dedos e o +Z aponta para a frente, como no antebraço procedural.
+      sk.mount('hand_r', this.handR, sk.restPos('hand_r').add(HAND_FIT.offset), HAND_FIT.quat);
+      this.grip.matrixAutoUpdate = false;
+      this.grip.add(this.weapon);
+      this.root.add(this.grip);
+      this.root.add(this.yawG);
+      this.yawG.add(sk.object);
+      this.yawG.scale.setScalar(scale);
+    } else {
+      this.skinned = null;
+      // Hierarquia: root(pos) > yaw > fall (pivô nos pés) > roll > pelvis > (spine > cabeça, ombros) + quadris.
+      this.root.add(this.yawG);
+      this.yawG.add(this.fallG);
+      this.fallG.add(this.rollG);
+      this.rollG.position.y = 0.55;
+      this.rollG.add(this.pelvis);
+      this.pelvis.position.y = 0.4; // quadril a ~0.95 m
+      this.yawG.scale.setScalar(scale);
 
-    const hips = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.16, 0.22, 12), shorts);
-    hips.scale.z = 0.7;
-    hips.castShadow = true;
-    this.pelvis.add(hips);
+      const hips = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.16, 0.22, 12), shorts);
+      hips.scale.z = 0.7;
+      hips.castShadow = true;
+      this.pelvis.add(hips);
 
-    // Tronco: camisa da torcida com faixa na cor secundária.
-    this.spine.position.y = 0.08;
-    this.pelvis.add(this.spine);
-    const torsoG = new THREE.CylinderGeometry(0.21, 0.165, 0.5, 14);
-    torsoG.translate(0, 0.27, 0);
-    const torso = new THREE.Mesh(torsoG, this.shirtMat);
-    torso.scale.set(build.torso, 1, 0.62 * build.torso);
-    torso.castShadow = true;
-    // Faixa na cor secundária: uma na lisa, três na listrada.
-    const bands = v.camisa === 'listrada' ? [0.16, 0.29, 0.42] : [0.36];
-    for (const y of bands) {
-      const stripeG = new THREE.CylinderGeometry(0.212, 0.2, v.camisa === 'listrada' ? 0.05 : 0.07, 14);
-      stripeG.translate(0, y, 0);
-      const stripe = new THREE.Mesh(stripeG, trimMat);
-      stripe.scale.set(build.torso, 1, 0.63 * build.torso);
-      this.spine.add(stripe);
+      // Tronco: camisa da torcida com faixa na cor secundária.
+      this.spine.position.y = 0.08;
+      this.pelvis.add(this.spine);
+      const torsoG = new THREE.CylinderGeometry(0.21, 0.165, 0.5, 14);
+      torsoG.translate(0, 0.27, 0);
+      const torso = new THREE.Mesh(torsoG, this.jerseyMat);
+      torso.scale.set(build.torso, 1, 0.62 * build.torso);
+      torso.castShadow = true;
+      // Faixa na cor secundária: uma na lisa, três na listrada.
+      const bands = v.camisa === 'listrada' ? [0.16, 0.29, 0.42] : [0.36];
+      for (const y of bands) {
+        const stripeG = new THREE.CylinderGeometry(0.212, 0.2, v.camisa === 'listrada' ? 0.05 : 0.07, 14);
+        stripeG.translate(0, y, 0);
+        const stripe = new THREE.Mesh(stripeG, trimMat);
+        stripe.scale.set(build.torso, 1, 0.63 * build.torso);
+        this.spine.add(stripe);
+      }
+      const collar = new THREE.Mesh(new THREE.TorusGeometry(0.065, 0.018, 6, 14), trimMat);
+      collar.rotation.x = Math.PI / 2;
+      collar.position.y = 0.53;
+      const neck = segment(0.09, 0.05, 0.055, skin);
+      neck.position.y = 0.6;
+      this.spine.add(torso, collar, neck);
+      if (v.acessorio === 'corrente') {
+        const gold = mat(0xd4a017);
+        this.allMats.push(gold);
+        const chain = new THREE.Mesh(new THREE.TorusGeometry(0.1 * build.torso, 0.012, 6, 20), gold);
+        chain.rotation.x = Math.PI / 2 + 0.35;
+        chain.position.set(0, 0.5, 0.03);
+        this.spine.add(chain);
+      }
+
+      // Cabeça.
+      this.head.position.y = 0.6;
+      // Cabeça um pouco maior que o real: lê melhor de longe (só visual, hitbox não muda).
+      this.head.scale.setScalar(1.12);
+      this.spine.add(this.head);
+      const skull = new THREE.Mesh(new THREE.SphereGeometry(0.11, 16, 12), skin);
+      skull.scale.set(0.92, 1.12, 1);
+      skull.position.y = 0.11;
+      skull.castShadow = true;
+      const nose = new THREE.Mesh(new THREE.ConeGeometry(0.018, 0.04, 6), skin);
+      nose.rotation.x = Math.PI / 2;
+      nose.position.set(0, 0.1, 0.11);
+      const earG = new THREE.SphereGeometry(0.025, 6, 6);
+      const earL = new THREE.Mesh(earG, skin);
+      earL.position.set(0.1, 0.1, 0);
+      const earR = new THREE.Mesh(earG, skin);
+      earR.position.set(-0.1, 0.1, 0);
+      const eyeG = new THREE.SphereGeometry(0.012, 6, 6);
+      const eyeL = new THREE.Mesh(eyeG, eyeMat);
+      eyeL.position.set(0.035, 0.13, 0.095);
+      const eyeR = new THREE.Mesh(eyeG, eyeMat);
+      eyeR.position.set(-0.035, 0.13, 0.095);
+      this.head.add(skull, nose, earL, earR, eyeL, eyeR);
+      this.buildHair(v, hair);
+      this.buildBeard(v, hair);
+      this.buildHeadwear(v, trimMat);
+
+      // Braços. O lado direito do personagem é -X (ele olha para +Z).
+      const arm = (side: 1 | -1, sh: THREE.Group, el: THREE.Group) => {
+        sh.position.set(side * build.shoulder, 0.48, 0);
+        this.spine.add(sh);
+        sh.add(joint(0.062, sleeve), segment(0.13, 0.064, 0.058, sleeve), segment(0.28, 0.05, 0.043, skin));
+        el.position.y = -0.28;
+        sh.add(el);
+        const fist = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.09, 0.085), skin);
+        fist.position.y = -0.29;
+        fist.scale.setScalar(1.25);
+        fist.castShadow = true;
+        el.add(joint(0.044, skin), segment(0.25, 0.043, 0.034, skin), fist);
+      };
+      arm(1, this.shL, this.elL);
+      arm(-1, this.shR, this.elR);
+      this.handR.position.y = -0.29;
+      this.elR.add(this.handR);
+      this.handR.add(this.weapon);
+
+      // Pernas: calção, coxa, joelho, canela, meião e tênis.
+      const leg = (side: 1 | -1, hip: THREE.Group, knee: THREE.Group) => {
+        hip.position.set(side * build.hip, -0.06, 0);
+        this.pelvis.add(hip);
+        hip.add(segment(0.2, 0.085, 0.075, shorts), segment(0.42, 0.075, 0.055, skin));
+        knee.position.y = -0.42;
+        hip.add(knee);
+        const sock = segment(0.14, 0.045, 0.04, socks);
+        sock.position.y = -0.27;
+        const shoe = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.07, 0.25), shoes);
+        shoe.position.set(0, -0.44, 0.05);
+        shoe.scale.setScalar(1.12);
+        shoe.castShadow = true;
+        knee.add(joint(0.055, skin), segment(0.3, 0.055, 0.04, skin), sock, shoe);
+      };
+      leg(1, this.hipL, this.kneeL);
+      leg(-1, this.hipR, this.kneeR);
+
+      // Contorno: cópia da peça com as faces de trás, inflada pela normal (a arma, criada depois, fica sem).
+      const outlineMat = allied ? OUTLINE_ALLY : OUTLINE_ENEMY;
+      const parts: THREE.Mesh[] = [];
+      this.yawG.traverse((o) => {
+        if (!(o instanceof THREE.Mesh) || !o.castShadow) return;
+        o.geometry.computeBoundingSphere();
+        const r = o.geometry.boundingSphere?.radius ?? 0;
+        if (r >= OUTLINE_MIN_RADIUS) parts.push(o);
+      });
+      for (const p of parts) {
+        const hull = new THREE.Mesh(p.geometry, outlineMat);
+        p.add(hull);
+        this.outlines.push(hull);
+      }
     }
-    const collar = new THREE.Mesh(new THREE.TorusGeometry(0.065, 0.018, 6, 14), trimMat);
-    collar.rotation.x = Math.PI / 2;
-    collar.position.y = 0.53;
-    const neck = segment(0.09, 0.05, 0.055, skin);
-    neck.position.y = 0.6;
-    this.spine.add(torso, collar, neck);
-    if (v.acessorio === 'corrente') {
-      const gold = mat(0xd4a017, 0.25);
-      gold.metalness = 0.8;
-      this.allMats.push(gold);
-      const chain = new THREE.Mesh(new THREE.TorusGeometry(0.1 * build.torso, 0.012, 6, 20), gold);
-      chain.rotation.x = Math.PI / 2 + 0.35;
-      chain.position.set(0, 0.5, 0.03);
-      this.spine.add(chain);
-    }
-
-    // Cabeça.
-    this.head.position.y = 0.6;
-    this.spine.add(this.head);
-    const skull = new THREE.Mesh(new THREE.SphereGeometry(0.11, 16, 12), skin);
-    skull.scale.set(0.92, 1.12, 1);
-    skull.position.y = 0.11;
-    skull.castShadow = true;
-    const nose = new THREE.Mesh(new THREE.ConeGeometry(0.018, 0.04, 6), skin);
-    nose.rotation.x = Math.PI / 2;
-    nose.position.set(0, 0.1, 0.11);
-    const earG = new THREE.SphereGeometry(0.025, 6, 6);
-    const earL = new THREE.Mesh(earG, skin);
-    earL.position.set(0.1, 0.1, 0);
-    const earR = new THREE.Mesh(earG, skin);
-    earR.position.set(-0.1, 0.1, 0);
-    const eyeG = new THREE.SphereGeometry(0.012, 6, 6);
-    const eyeL = new THREE.Mesh(eyeG, eyeMat);
-    eyeL.position.set(0.035, 0.13, 0.095);
-    const eyeR = new THREE.Mesh(eyeG, eyeMat);
-    eyeR.position.set(-0.035, 0.13, 0.095);
-    this.head.add(skull, nose, earL, earR, eyeL, eyeR);
-    this.buildHair(v, hair);
-    this.buildBeard(v, hair);
-    this.buildHeadwear(v, trimMat);
-
-    // Braços. O lado direito do personagem é -X (ele olha para +Z).
-    const arm = (side: 1 | -1, sh: THREE.Group, el: THREE.Group) => {
-      sh.position.set(side * build.shoulder, 0.48, 0);
-      this.spine.add(sh);
-      sh.add(joint(0.062, sleeve), segment(0.13, 0.064, 0.058, sleeve), segment(0.28, 0.05, 0.043, skin));
-      el.position.y = -0.28;
-      sh.add(el);
-      const fist = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.09, 0.085), skin);
-      fist.position.y = -0.29;
-      fist.castShadow = true;
-      el.add(joint(0.044, skin), segment(0.25, 0.043, 0.034, skin), fist);
-    };
-    arm(1, this.shL, this.elL);
-    arm(-1, this.shR, this.elR);
-    this.handR.position.y = -0.29;
-    this.elR.add(this.handR);
-    this.handR.add(this.weapon);
-
-    // Pernas: calção, coxa, joelho, canela, meião e tênis.
-    const leg = (side: 1 | -1, hip: THREE.Group, knee: THREE.Group) => {
-      hip.position.set(side * build.hip, -0.06, 0);
-      this.pelvis.add(hip);
-      hip.add(segment(0.2, 0.085, 0.075, shorts), segment(0.42, 0.075, 0.055, skin));
-      knee.position.y = -0.42;
-      hip.add(knee);
-      const sock = segment(0.14, 0.045, 0.04, socks);
-      sock.position.y = -0.27;
-      const shoe = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.07, 0.25), shoes);
-      shoe.position.set(0, -0.44, 0.05);
-      shoe.castShadow = true;
-      knee.add(joint(0.055, skin), segment(0.3, 0.055, 0.04, skin), sock, shoe);
-    };
-    leg(1, this.hipL, this.kneeL);
-    leg(-1, this.hipR, this.kneeR);
 
     this.guard = new THREE.Mesh(
       new THREE.RingGeometry(0.55, 0.66, 32, 1, Math.PI / 2 - 1.3, 2.6),
@@ -377,7 +539,7 @@ export class CharacterView {
       crown.castShadow = brim.castShadow = true;
       this.head.add(crown, brim);
     } else if (v.acessorio === 'bandana') {
-      const cloth = mat(0xc1121f, 0.9);
+      const cloth = mat(0xc1121f);
       this.allMats.push(cloth);
       const band = new THREE.Mesh(new THREE.TorusGeometry(0.104, 0.018, 6, 20), cloth);
       band.rotation.x = Math.PI / 2 - 0.2;
@@ -385,8 +547,7 @@ export class CharacterView {
       band.position.set(0, 0.175, 0);
       this.head.add(band);
     } else if (v.acessorio === 'oculos') {
-      const glass = mat(0x0b0b0b, 0.15);
-      glass.metalness = 0.4;
+      const glass = mat(0x0b0b0b);
       this.allMats.push(glass);
       const lensG = new THREE.BoxGeometry(0.042, 0.026, 0.012);
       for (const side of [1, -1]) {
@@ -412,11 +573,13 @@ export class CharacterView {
       this.weapon.remove(c);
       if (c instanceof THREE.Mesh) c.geometry.dispose();
     }
-    if (!data.weapons[id] || id === 'punhos') return;
-    const metal = new THREE.MeshStandardMaterial({ color: 0xc8d0dc, roughness: 0.3, metalness: 0.8 });
-    const wood = mat(0x9c6b3c, 0.8);
-    const dark = mat(0x222222, 0.6);
-    const glass = new THREE.MeshStandardMaterial({ color: 0x2a9d8f, roughness: 0.1, transparent: true, opacity: 0.75 });
+    if ((!data.weapons[id] && id !== 'bomba' && id !== 'gas') || id === 'punhos') return;
+    const metal = mat(0xc8d0dc);
+    const wood = mat(0x9c6b3c);
+    const dark = mat(0x222222);
+    const glass = mat(0x2a9d8f);
+    glass.transparent = true;
+    glass.opacity = 0.75;
     this.allMats.push(metal, wood, dark, glass);
     // Cilindro ao longo do +Z local da arma, saindo da mão.
     const along = (len: number, r1: number, r2: number, m: THREE.Material, offset = 0) => {
@@ -462,6 +625,26 @@ export class CharacterView {
       case 'barra':
         along(0.95, 0.018, 0.018, metal, -0.15);
         break;
+      case 'bomba':
+      case 'gas': {
+        // Lata na mão (bomba de pavio ou granada de gás).
+        this.weapon.rotation.x = 0;
+        const can = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.14, 10), id === 'bomba' ? wood : metal);
+        can.position.set(0, -0.02, 0.03);
+        this.weapon.add(can);
+        break;
+      }
+      case 'pistola': {
+        // Cano para a frente da mão, cabo descendo.
+        this.weapon.rotation.x = 0;
+        const barrel = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.05, 0.2), dark);
+        barrel.position.set(0, 0.02, 0.07);
+        const grip = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.1, 0.045), dark);
+        grip.position.set(0, -0.03, -0.01);
+        grip.rotation.x = -0.25;
+        this.weapon.add(barrel, grip);
+        break;
+      }
     }
   }
 
@@ -475,7 +658,7 @@ export class CharacterView {
 
     // Locomoção.
     const run = f.running;
-    const amt = Math.min(1, speed / (run ? 6.8 : 4));
+    const amt = Math.min(1, speed / (run ? DEFAULT_COMBAT_DATA.constants.runSpeed : DEFAULT_COMBAT_DATA.constants.walkSpeed));
     const s = Math.sin(this.walkPhase);
     const c = Math.cos(this.walkPhase);
     if (amt > 0.05) {
@@ -629,13 +812,6 @@ export class CharacterView {
         p.shRz = 0.55;
         p.headX = 0.35;
         p.spineX = 0.2;
-        break;
-      case 'eating':
-        // Churrasquinho na boca, mastigando.
-        p.shR = -1.25;
-        p.elR = -2.4;
-        p.shRz = 0.35;
-        p.headX = Math.sin(t * 0.6) * 0.08;
         break;
       case 'reviving':
         // Ajoelhado puxando o aliado.
@@ -891,13 +1067,31 @@ export class CharacterView {
     }
   }
 
+  private syncGrip(): void {
+    this.handR.updateWorldMatrix(true, false);
+    this.handR.matrixWorld.decompose(_gp, _gq, _gs);
+    _gs.setScalar(this.yawG.scale.x);
+    this.root.updateWorldMatrix(true, false);
+    this.grip.matrix.copy(_gm.copy(this.root.matrixWorld).invert()).multiply(_gw.compose(_gp, _gq, _gs));
+  }
+
+  playThrow(): void {
+    this.throwT = THROW_SECS;
+  }
+
   update(f: FighterSnapshot, camera: THREE.Camera, dt: number): void {
     this.root.position.set(f.pos.x, f.y, f.pos.z);
-    this.yawG.rotation.y = f.facing;
+    // Gira até o yaw da simulação em ~60 ms (sem o giro de 180° num quadro só).
+    if (Number.isNaN(this.visYaw)) this.visYaw = f.facing;
+    let dYaw = f.facing - this.visYaw;
+    dYaw = Math.atan2(Math.sin(dYaw), Math.cos(dYaw));
+    this.visYaw += dYaw * (1 - Math.exp(-dt * 18));
+    this.yawG.rotation.y = this.visYaw;
     // Anel no chão: com Euler XYZ, +Y local aponta para dirFromYaw(facing) quando z = facing + PI.
     this.guard.rotation.set(-Math.PI / 2, 0, f.facing + Math.PI);
     this.guard.position.y = 0.04 - f.y;
-    this.setWeapon(f.weapon);
+    this.setWeapon(f.inHand ?? f.weapon);
+    this.vest.visible = f.colete > 0;
     this.breath += dt * 2.2;
 
     // Velocidade: ciclo de passos e direção do rolamento.
@@ -908,6 +1102,7 @@ export class CharacterView {
       const moved = Math.hypot(dx, dz);
       if (moved < 2) {
         speed = moved / dt;
+        this.speedEma += (speed - this.speedEma) * (1 - Math.exp(-dt * 12));
         this.walkPhase += moved * (f.running ? 2.6 : 3.4);
       }
       if (moved > 1e-4 && moved < 2) {
@@ -919,32 +1114,41 @@ export class CharacterView {
     }
     this.lastPos.set(f.pos.x, f.pos.z);
 
-    const { p: target, crisp, roll } = this.targetPose(f, speed);
-    const k = 1 - Math.exp(-dt * (crisp ? 30 : 14));
-    for (const key of KEYS) this.pose[key] += (target[key] - this.pose[key]) * k;
-    const q = this.pose;
-
-    this.hipL.rotation.set(q.hipL, 0, q.hipLz);
-    this.hipR.rotation.set(q.hipR, 0, q.hipRz);
-    this.kneeL.rotation.x = q.kneeL;
-    this.kneeR.rotation.x = q.kneeR;
-    this.shL.rotation.set(q.shL, 0, q.shLz);
-    this.shR.rotation.set(q.shR, 0, q.shRz);
-    this.elL.rotation.x = q.elL;
-    this.elR.rotation.x = q.elR;
-    this.spine.rotation.set(q.spineX, q.spineY, 0);
-    this.head.rotation.x = q.headX - q.spineX * 0.6;
-    this.pelvis.position.y = 0.4 + q.pelvisY;
-    this.fallG.rotation.x = q.fall;
-    this.fallG.rotation.y = q.spin;
-
-    // Rolamento: gira em torno do eixo perpendicular ao movimento (local).
-    if (roll > 0) {
-      const axis = new THREE.Vector3(this.velLocal.y, 0, -this.velLocal.x);
-      if (axis.lengthSq() < 1e-6) axis.set(1, 0, 0);
-      this.rollG.quaternion.setFromAxisAngle(axis.normalize(), roll);
+    if (this.skinned) {
+      const info = (n: string) => this.skinned?.info(n) ?? { duration: 1, impact: 0.4 };
+      this.throwT = Math.max(0, this.throwT - dt);
+      // Arremesso: gesto de braço por cima da locomoção (só quando o boneco está livre).
+      const pick = this.throwT > 0 && f.state === 'idle' ? { clip: THROW_CLIP, time: info(THROW_CLIP).duration * (1 - this.throwT / THROW_SECS), speed: 1 } : pickAnim(f, findMove(data, f.move), this.speedEma, info);
+      this.skinned.apply(pick, dt);
+      this.syncGrip();
     } else {
-      this.rollG.quaternion.identity();
+      const { p: target, crisp, roll } = this.targetPose(f, this.speedEma);
+      const k = 1 - Math.exp(-dt * (crisp ? 30 : 14));
+      for (const key of KEYS) this.pose[key] += (target[key] - this.pose[key]) * k;
+      const q = this.pose;
+
+      this.hipL.rotation.set(q.hipL, 0, q.hipLz);
+      this.hipR.rotation.set(q.hipR, 0, q.hipRz);
+      this.kneeL.rotation.x = q.kneeL;
+      this.kneeR.rotation.x = q.kneeR;
+      this.shL.rotation.set(q.shL, 0, q.shLz);
+      this.shR.rotation.set(q.shR, 0, q.shRz);
+      this.elL.rotation.x = q.elL;
+      this.elR.rotation.x = q.elR;
+      this.spine.rotation.set(q.spineX, q.spineY, 0);
+      this.head.rotation.x = q.headX - q.spineX * 0.6;
+      this.pelvis.position.y = 0.4 + q.pelvisY;
+      this.fallG.rotation.x = q.fall;
+      this.fallG.rotation.y = q.spin;
+
+      // Rolamento: gira em torno do eixo perpendicular ao movimento (local).
+      if (roll > 0) {
+        const axis = new THREE.Vector3(this.velLocal.y, 0, -this.velLocal.x);
+        if (axis.lengthSq() < 1e-6) axis.set(1, 0, 0);
+        this.rollG.quaternion.setFromAxisAngle(axis.normalize(), roll);
+      } else {
+        this.rollG.quaternion.identity();
+      }
     }
 
     // Indicadores de estado.
@@ -953,6 +1157,14 @@ export class CharacterView {
     this.shirtMat.emissive.set(
       f.armored ? 0x5b21b6 : f.counter ? 0x8a6a00 : f.state === 'staggered' || f.state === 'guardbreak' ? 0x5a3d00 : 0x000000,
     );
+    // O tronco tem textura: o clarão do acerto vem pelo emissive em vez da cor.
+    if (flash) this.jerseyMat.emissive.set(0xaaaaaa);
+    else if (this.outlineMat) {
+      // glTF: o corpo é uma malha só (pintar tudo de roxo assusta); armadura e contra-golpe vão no contorno.
+      this.jerseyMat.emissive.set(f.state === 'staggered' || f.state === 'guardbreak' ? 0x3a2800 : 0x000000);
+      this.outlineMat.color.setHex(f.armored ? 0xb06cff : f.counter ? 0xffc300 : this.outlineBase);
+    } else this.jerseyMat.emissive.copy(this.shirtMat.emissive);
+    for (const o of this.outlines) o.visible = !f.invulnerable;
     this.aura.visible = f.buffed && f.state !== 'ko' && f.state !== 'dead';
     if (this.aura.visible) this.aura.material.opacity = 0.3 + Math.sin(this.breath * 3) * 0.15;
     this.aura.position.y = 0.03 - f.y;
@@ -982,8 +1194,11 @@ export class CharacterView {
 
   dispose(): void {
     this.root.traverse((o) => {
-      if (o instanceof THREE.Mesh) o.geometry.dispose();
+      if (o instanceof THREE.Mesh && !o.userData.shared) o.geometry.dispose();
     });
+    this.skinned?.dispose();
+    this.jerseyTex.dispose();
+    this.outlineMat?.dispose();
     for (const m of this.allMats) m.dispose();
     this.guard.material.dispose();
     this.aura.material.dispose();

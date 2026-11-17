@@ -1,11 +1,17 @@
 import { type CharacterVisual, createSim, type FighterSnapshot, type TeamSide, toSnapshot } from '@torcidas/shared';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { CharacterView } from '../game/character';
+import { fighterAsset, loadFighterModel } from '../game/fighterModel';
 
 interface Props {
   team: TeamSide;
   visual: CharacterVisual;
+  /** Fixa para onde o boneco olha (rad) em vez de girar sozinho; arrastar ainda gira. */
+  facing?: number;
+  className?: string;
+  /** Sem arrastar (decorativo). */
+  still?: boolean;
 }
 
 interface Stage {
@@ -15,11 +21,21 @@ interface Stage {
 }
 
 /** Prévia 3D do personagem: o mesmo boneco da partida, em guarda, girando (arraste para girar). */
-export function CharacterPreview({ team, visual }: Props) {
+export function CharacterPreview({ team, visual, facing, className, still }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stage = useRef<Stage | null>(null);
-  const yaw = useRef(0.5);
+  const yaw = useRef(facing ?? 0.5);
+  const spin = useRef(facing === undefined);
   const dragging = useRef<number | null>(null);
+  const [model, setModel] = useState(() => fighterAsset() !== null);
+
+  useEffect(() => {
+    let live = true;
+    void loadFighterModel().then((a) => live && setModel(a !== null));
+    return () => {
+      live = false;
+    };
+  }, []);
 
   // Renderer e cena: um só por prévia (trocar opção não cria outro contexto WebGL).
   useEffect(() => {
@@ -57,7 +73,7 @@ export function CharacterPreview({ team, visual }: Props) {
       raf = requestAnimationFrame(frame);
       const dt = Math.min(0.1, (now - last) / 1000);
       last = now;
-      if (dragging.current === null) yaw.current += dt * 0.6;
+      if (dragging.current === null && spin.current) yaw.current += dt * 0.6;
       const st = stage.current;
       st?.view?.update({ ...st.snap, facing: yaw.current }, camera, dt);
       renderer.render(scene, camera);
@@ -74,11 +90,12 @@ export function CharacterPreview({ team, visual }: Props) {
     };
   }, []);
 
-  // Boneco: remonta quando o visual ou a torcida mudam.
+  // Boneco: remonta quando o visual ou a torcida mudam (pelo conteúdo: o objeto pode ser recriado a cada render).
+  const visualKey = JSON.stringify(visual);
   useEffect(() => {
     const st = stage.current;
     if (!st) return;
-    const view = new CharacterView('preview', team, '', true, true, visual);
+    const view = new CharacterView('preview', team, '', true, true, JSON.parse(visualKey) as CharacterVisual);
     st.scene.add(view.root);
     st.view = view;
     st.snap = { ...st.snap, team };
@@ -87,14 +104,15 @@ export function CharacterPreview({ team, visual }: Props) {
       view.dispose();
       if (st.view === view) st.view = null;
     };
-  }, [team, visual]);
+  }, [team, visualKey, model]);
 
   return (
     <canvas
       ref={canvasRef}
-      className="char-preview"
-      aria-label="Prévia do personagem (arraste para girar)"
+      className={className ?? 'char-preview'}
+      {...(still ? { 'aria-hidden': true } : { 'aria-label': 'Prévia do personagem (arraste para girar)' })}
       onPointerDown={(e) => {
+        if (still) return;
         dragging.current = e.clientX;
         e.currentTarget.setPointerCapture(e.pointerId);
       }}

@@ -1,5 +1,8 @@
 import { audioOut } from './sfx';
 
+/** Volume do batuque (era 0,32; abaixado a pedido). */
+const MUSIC_VOL = 0.2;
+
 // Música: bateria de torcida (batucada) sintetizada, em loop, com agendamento à frente
 // (lookahead) no relógio do WebAudio. A intensidade (0..1) acrescenta camadas quando a
 // briga esquenta ou no último minuto.
@@ -104,7 +107,7 @@ export function startMusic(): void {
   if (!a || timer) return;
   const { ctx, out } = a;
   gain = ctx.createGain();
-  gain.gain.value = on ? 0.32 : 0;
+  gain.gain.value = on ? MUSIC_VOL : 0;
   gain.connect(out);
   nextTime = ctx.currentTime + 0.1;
   stepIdx = 0;
@@ -132,7 +135,7 @@ export function setMusicIntensity(v: number): void {
 
 export function toggleMusic(): void {
   on = !on;
-  if (gain) gain.gain.value = on ? 0.32 : 0;
+  if (gain) gain.gain.value = on ? MUSIC_VOL : 0;
 }
 
 export function isMusicOn(): boolean {

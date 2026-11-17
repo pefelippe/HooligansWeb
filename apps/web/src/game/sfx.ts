@@ -36,7 +36,6 @@ export interface SoundOpts {
 let ctx: AudioContext | null = null;
 let master: GainNode | null = null;
 let noiseBuf: AudioBuffer | null = null;
-let ambience: { stop(): void } | null = null;
 let muted = false;
 
 function audio(): AudioContext | null {
@@ -269,43 +268,3 @@ function crowd(a: AudioContext, dest: AudioNode, t: number, dur: number, gain: n
   }
 }
 
-/** Murmúrio de estádio em loop, com ondas de "olê" de vez em quando. */
-export function startAmbience(): void {
-  const a = audio();
-  if (!a || ambience) return;
-  const src = a.createBufferSource();
-  src.buffer = noise(a);
-  src.loop = true;
-  const lp = a.createBiquadFilter();
-  lp.type = 'bandpass';
-  lp.frequency.value = 550;
-  lp.Q.value = 0.6;
-  const g = a.createGain();
-  g.gain.value = 0.05;
-  // Oscilação lenta do volume = multidão respirando.
-  const lfo = a.createOscillator();
-  lfo.frequency.value = 0.15;
-  const lfoGain = a.createGain();
-  lfoGain.gain.value = 0.025;
-  lfo.connect(lfoGain).connect(g.gain);
-  src.connect(lp).connect(g).connect(master ?? a.destination);
-  src.start();
-  lfo.start();
-  const chant = setInterval(() => {
-    if (muted || !ctx) return;
-    const d = out(ctx, { volume: 0.4, pan: Math.random() * 2 - 1 });
-    crowd(ctx, d, ctx.currentTime, 2.5, 0.12, Math.random() < 0.5 ? 'oh' : 'ah');
-  }, 9000);
-  ambience = {
-    stop() {
-      clearInterval(chant);
-      src.stop();
-      lfo.stop();
-      ambience = null;
-    },
-  };
-}
-
-export function stopAmbience(): void {
-  ambience?.stop();
-}

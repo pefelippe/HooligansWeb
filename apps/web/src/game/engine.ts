@@ -3,6 +3,7 @@ import {
   Buttons,
   DEFAULT_COMBAT_DATA,
   DEFAULT_CONSTANTS,
+  STADIUM,
   dirFromYaw,
   type Fighter,
   type FighterSnapshot,
@@ -25,12 +26,15 @@ import {
 } from '@torcidas/shared';
 import * as THREE from 'three';
 import { CharacterView } from './character';
+import { fighterAsset, loadFighterModel } from './fighterModel';
 import { CombatFx } from './fx';
+import { ThrowFx } from './throwFx';
 import { ControlPoints, POINT_COLORS } from './points';
 import { GameConnection, type Welcome } from './net';
+import { QUALITY_LEVELS, type QualityState, stepQuality } from './quality';
 import { buildScene } from './scene';
 import { setMusicIntensity, startMusic, stopMusic, toggleMusic, isMusicOn } from './music';
-import { type HitMaterial, isMuted, playSound, type SoundName, setMuted, startAmbience, stopAmbience } from './sfx';
+import { type HitMaterial, isMuted, playSound, type SoundName, setMuted } from './sfx';
 
 export interface HudState {
   connected: boolean;
@@ -46,6 +50,8 @@ export interface HudState {
   pointerLocked: boolean;
   lockTargetNick: string | null;
   rtt: number;
+  /** Desempenho (só em dev): FPS, tempo de frame, draw calls, triângulos e nível de qualidade. */
+  perf: { fps: number; ms: number; calls: number; tris: number; quality: number } | null;
   /** Dicas de contexto (X: levantar, R: especial...). */
   prompts: string[];
   warnings: string[];
@@ -61,10 +67,26 @@ export interface EngineCallbacks {
   onMatchEnd(r: MatchResult): void;
   onToggleShop(): void;
   onScoreboard(show: boolean): void;
+  /** Roda de itens (Z segurado): direção do mouse acumulada; null = fechou (commit = soltou a tecla). */
+  onWheel(v: { x: number; y: number } | null, commit: boolean): void;
+  /** O jogador soltou o mouse (Esc com pointer lock): abre o menu. */
+  onMenu(): void;
   onClose(reason: string): void;
 }
 
+const SENS_KEY = 'torcidas.sens';
+function readSens(): number {
+  try {
+    const v = Number(localStorage.getItem(SENS_KEY));
+    return v > 0 ? v : 1;
+  } catch {
+    return 1;
+  }
+}
+
 const CAM_DIST = 4.4;
+/** Raio, em metros, que o minimapa mostra em volta do jogador. */
+const MINIMAP_VIEW = 38;
 const SHOULDER = 0.7;
 /** Assistência de mira (sem lock-on): alcance e meia-abertura do cone. */
 const ASSIST_RANGE = 3;
@@ -96,6 +118,9 @@ export class GameEngine {
   private mouse = 0;
   private latch = 0;
   private tabDownAt = 0;
+  private sens = readSens();
+  /** Roda de itens aberta: vetor do mouse (a câmera não gira enquanto isso). */
+  private wheel: { x: number; y: number } | null = null;
   private scoreboardShown = false;
   inputEnabled = true;
   private readonly cleanup: (() => void)[] = [];
@@ -111,12 +136,17 @@ export class GameEngine {
   private minimapBase: HTMLCanvasElement | null = null;
   private readonly lastPos = new Map<string, Vec2>();
   private fx: CombatFx | null = null;
+  private throwFx: ThrowFx | null = null;
   private points: ControlPoints | null = null;
   private lastFighters: FighterSnapshot[] = [];
   /** Assistência de mira: segura a mira no inimigo enquanto o golpe sai. */
   private assist: { id: string; until: number } | null = null;
   /** Lock-on: um puxão forte do mouse troca de alvo. */
   private flick = { acc: 0, at: 0 };
+  private sun: THREE.DirectionalLight | null = null;
+  private quality: QualityState = { level: 0, lowFor: 0 };
+  /** Tempo de frame suavizado (ms). */
+  private frameMs = 16.7;
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -124,8 +154,9 @@ export class GameEngine {
     ticket: string,
     private readonly cb: EngineCallbacks,
   ) {
+    void loadFighterModel();
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-    this.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio));
+    this.renderer.setPixelRatio(Math.min(QUALITY_LEVELS[0].pixelRatio, window.devicePixelRatio));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.conn = new GameConnection(url, ticket, {
@@ -153,15 +184,41 @@ export class GameEngine {
     for (const f of this.cleanup) f();
     for (const v of this.views.values()) v.dispose();
     this.fx?.dispose();
+    this.throwFx?.dispose();
     this.points?.dispose();
     this.renderer.dispose();
-    stopAmbience();
     stopMusic();
     if (document.pointerLockElement === this.canvas) document.exitPointerLock();
   }
 
   buy(item: string): void {
     this.conn.buy(item);
+  }
+
+  equip(item: string): void {
+    this.conn.equip(item);
+  }
+
+  toggleMute(): void {
+    setMuted(!isMuted());
+  }
+
+  switchMusic(): void {
+    toggleMusic();
+  }
+
+  /** Multiplicador da sensibilidade do mouse (guardado neste navegador). */
+  get sensitivity(): number {
+    return this.sens;
+  }
+
+  set sensitivity(v: number) {
+    this.sens = v;
+    try {
+      localStorage.setItem(SENS_KEY, String(v));
+    } catch {
+      // Sem storage (aba privada): vale só nesta sessão.
+    }
   }
 
   requestPointerLock(): void {
@@ -177,10 +234,13 @@ export class GameEngine {
   private onWelcome(w: Welcome): void {
     this.welcome = w;
     this.map = generateMap(w.seed);
-    const { scene } = buildScene(this.map);
+    const { scene, sun } = buildScene(this.map);
     this.scene = scene;
+    this.sun = sun;
+    sun.castShadow = QUALITY_LEVELS[this.quality.level]!.shadows;
     this.fx?.dispose();
     this.fx = new CombatFx(scene);
+    this.throwFx = new ThrowFx(scene);
     this.points?.dispose();
     this.points = new ControlPoints(scene, this.map, w.team);
     this.yaw = w.team === 0 ? Math.PI / 2 : -Math.PI / 2;
@@ -191,7 +251,6 @@ export class GameEngine {
       rules: { downed: true },
     });
     this.minimapBase = null;
-    startAmbience();
     startMusic();
   }
 
@@ -349,6 +408,32 @@ export class GameEngine {
           if (mine) playSound('ko', { volume: 1.1 });
           break;
         }
+        case 'fury': {
+          const mine = e.fighter === you || e.hit.includes(you);
+          if (mine) playSound('special', { volume: 1.2 });
+          this.sfxAt('guardbreak', posOf(e.fighter));
+          feed(`${this.name(e.fighter)} explodiu em FÚRIA${e.hit.length ? ` e derrubou ${e.hit.length}` : ''}!`, mine);
+          break;
+        }
+        case 'throw':
+          this.sfxAt('whoosh', posOf(e.fighter), undefined, 0.9);
+          this.views.get(e.fighter)?.playThrow();
+          break;
+        case 'explosion': {
+          const mine = e.fighter === you || e.hit.includes(you);
+          this.throwFx?.explode(e.pos);
+          this.sfxAt('guardbreak', e.pos, undefined, 1.4);
+          if (mine) playSound('special', { volume: 1.1 });
+          feed(`Bomba de ${this.name(e.fighter)}${e.hit.length ? ` derrubou ${e.hit.length}` : ''}`, mine);
+          break;
+        }
+        case 'gas':
+          this.throwFx?.puff(e.pos);
+          feed(`${this.name(e.fighter)} soltou gás lacrimogêneo`, e.fighter === you);
+          break;
+        case 'stunbreak':
+          if (e.fighter === you) feed('Escapou da trava: intocável por um instante', true);
+          break;
         case 'weaponBreak':
           if (e.fighter !== you) break;
           playSound('weaponBreak');
@@ -388,7 +473,7 @@ export class GameEngine {
     this.fx.spark(v.root, color, mine ? count : Math.ceil(count / 2));
   }
 
-  /** Sons que saem do estado (sem evento): assobio do golpe, passos, pulo, aterrissagem, churrasqueira. */
+  /** Sons que saem do estado (sem evento): assobio do golpe, passos, pulo, aterrissagem. */
   private stateSounds(f: FighterSnapshot, walked: number): void {
     if (f.id !== this.welcome?.you) return; // só os seus passos, assobios e pulos
     const p = this.prev.get(f.id) ?? { move: null, stateTick: 0, y: 0, step: 0, state: f.state };
@@ -397,9 +482,14 @@ export class GameEngine {
       const big = f.move.endsWith('.h') || f.move.endsWith('.esp') || def?.id === 'taco' || def?.id === 'barra';
       this.sfxAt(big ? 'bigWhoosh' : 'whoosh', f.pos, undefined, 0.8);
     }
+    // Tiro da pistola: traço e estampido no primeiro frame ativo.
+    const shot = f.state === 'attack' && f.move === 'pistola.l1' ? DEFAULT_COMBAT_DATA.weapons.pistola?.moves.light[0] : undefined;
+    if (shot && f.stateTick > shot.startup && p.stateTick <= shot.startup) {
+      this.throwFx?.shot(f.pos, f.facing, shot.hitbox.shape === 'capsule' ? shot.hitbox.to : 20);
+      this.sfxAt('guardbreak', f.pos, undefined, 1.2);
+    }
     if (f.y > 0.05 && p.y <= 0.05) this.sfxAt('jump', f.pos, undefined, 0.7);
     if (f.y <= 0.01 && p.y > 0.3) this.sfxAt('land', f.pos, undefined, 0.8);
-    if (f.state === 'eating' && p.state !== 'eating') this.sfxAt('sizzle', f.pos);
     // Um passo a cada 0,8 m andando (passada maior correndo).
     let step = p.step + walked;
     const stride = f.running ? 1.2 : 0.8;
@@ -431,8 +521,9 @@ export class GameEngine {
     if (me.state === 'reviving') prompts.push('X: segure para levantar');
     else if (ally && this.inCombat(me, ally, fighters)) warnings.push('Em combate: não dá para levantar');
     else if (ally) prompts.push(`X (segure): levantar ${this.name(ally.id)}`);
-    else if (this.nearCart(me)) prompts.push(`X: churrasquinho $${c.cart.cost} (+${(c.cart.ticks / c.cart.interval) * c.cart.amount} vida)`);
     if (me.curativos > 0 && me.hp < c.maxHp * 0.5) prompts.push(`4: usar curativo (${me.curativos})`);
+    else if (me.bandagens > 0 && me.hp < c.maxHp * 0.6) prompts.push(`5: bandagem (${me.bandagens})`);
+    if (me.inHand) prompts.push(`Clique: arremessar ${me.inHand === 'bomba' ? 'bomba' : 'gás'} · roda volta para a arma`);
     if (me.state === 'block' && me.stamina < c.maxStamina * 0.15) warnings.push('Guarda fraca: pouco fôlego');
     if (me.bleeding > 0 && me.curativos > 0) warnings.push('Sangrando: o curativo (4) estanca');
     return { prompts, warnings };
@@ -449,48 +540,54 @@ export class GameEngine {
     return fought || fighters.some((f) => f.team !== me.team && standing(f) && (near(f.pos, me.pos) || near(f.pos, ally.pos)));
   }
 
-  private nearCart(me: FighterSnapshot): boolean {
-    const r = DEFAULT_CONSTANTS.cart.range;
-    return !!this.map?.boxes.some((b) => {
-      if (b.kind !== 'carrinho') return false;
-      const dx = Math.max(Math.abs(me.pos.x - b.x) - b.hw, 0);
-      const dz = Math.max(Math.abs(me.pos.z - b.z) - b.hd, 0);
-      return Math.hypot(dx, dz) <= r;
-    });
-  }
 
-  /** Minimapa: norte = estádio. Aliados sempre; inimigos só perto de você ou de um aliado. */
+  /** Minimapa redondo centrado em você (norte = estádio). Aliados sempre; inimigos só perto de você ou de um aliado. */
   private drawMinimap(me: FighterSnapshot | null, fighters: FighterSnapshot[], points: MatchSnapshotInfo['points']): void {
     const c = this.minimap;
     const map = this.map;
     if (!c || !map || !this.welcome) return;
     const W = c.width;
     const H = c.height;
-    const sx = W / (map.halfW * 2);
-    const sz = H / (map.halfD * 2);
-    const px = (x: number) => (x + map.halfW) * sx;
-    const pz = (z: number) => (map.halfD - z) * sz;
-    if (!this.minimapBase || this.minimapBase.width !== W) {
+    // Mostra MINIMAP_VIEW metros em volta de você; o mapa inteiro é pré-desenhado nessa escala.
+    const sx = W / (MINIMAP_VIEW * 2);
+    const sz = sx;
+    const BW = Math.ceil(map.halfW * 2 * sx);
+    const BH = Math.ceil(map.halfD * 2 * sz);
+    const bx = (x: number) => (x + map.halfW) * sx;
+    const bz = (z: number) => (map.halfD - z) * sz;
+    const ox = W / 2 - bx(me?.pos.x ?? 0);
+    const oz = H / 2 - bz(me?.pos.z ?? 0);
+    const px = (x: number) => bx(x) + ox;
+    const pz = (z: number) => bz(z) + oz;
+    if (!this.minimapBase || this.minimapBase.width !== BW) {
       const b = document.createElement('canvas');
-      b.width = W;
-      b.height = H;
+      b.width = BW;
+      b.height = BH;
       const g = b.getContext('2d');
       if (g) {
         g.fillStyle = '#1b1f26';
-        g.fillRect(0, 0, W, H);
+        g.fillRect(0, 0, BW, BH);
         for (const box of map.boxes) {
           if (box.kind === 'estadio' || box.kind === 'muro' || box.kind === 'grade') continue;
           g.fillStyle = box.kind === 'carro' ? '#3a404b' : box.kind === 'onibus' ? '#59606c' : '#6b5536';
-          g.fillRect(px(box.x - box.hw), pz(box.z + box.hd), box.hw * 2 * sx, box.hd * 2 * sz);
+          g.fillRect(bx(box.x - box.hw), bz(box.z + box.hd), box.hw * 2 * sx, box.hd * 2 * sz);
         }
         g.fillStyle = '#2a2f38';
-        g.fillRect(0, 0, W, 4);
+        g.fillRect(0, 0, BW, 4);
+        // Castelão (oval).
+        g.beginPath();
+        g.ellipse(bx(STADIUM.x), bz(STADIUM.z), STADIUM.rx * sx, STADIUM.rz * sz, 0, 0, Math.PI * 2);
+        g.fillStyle = '#4b525d';
+        g.fill();
+        g.strokeStyle = '#c9d0da';
+        g.lineWidth = 2;
+        g.stroke();
         map.sedes.forEach((sd, team) => {
           const t = TORCIDAS[team];
           if (!t) return;
           const a = sd.area;
           g.beginPath();
-          g.rect(px(a.x - a.hw), pz(a.z + a.hd), a.hw * 2 * sx, a.hd * 2 * sz);
+          g.rect(bx(a.x - a.hw), bz(a.z + a.hd), a.hw * 2 * sx, a.hd * 2 * sz);
           g.fillStyle = team === this.welcome?.team ? 'rgba(80,170,255,0.18)' : 'rgba(255,80,80,0.18)';
           g.fill();
           g.strokeStyle = team === this.welcome?.team ? 'rgba(80,170,255,0.7)' : 'rgba(255,80,80,0.7)';
@@ -502,14 +599,27 @@ export class GameEngine {
     }
     const g = c.getContext('2d');
     if (!g) return;
-    g.drawImage(this.minimapBase, 0, 0);
-    // Pontos de controle: círculo na cor do dono e a letra.
+    g.fillStyle = '#0e1116';
+    g.fillRect(0, 0, W, H);
+    g.drawImage(this.minimapBase, ox, oz);
+    // Pontos de controle: círculo na cor do dono e a letra. Fora da vista, preso na borda (aponta a direção).
     for (const p of points) {
       const cp = map.controlPoints.find((x) => x.id === p.id);
       if (!cp) continue;
       const color = p.owner === null ? POINT_COLORS.neutral : p.owner === this.welcome.team ? POINT_COLORS.ally : POINT_COLORS.enemy;
+      let cx = px(cp.pos.x);
+      let cy = pz(cp.pos.z);
+      const dx = cx - W / 2;
+      const dy = cy - H / 2;
+      const edge = W / 2 - 10;
+      const out = Math.hypot(dx, dy) > edge;
+      if (out) {
+        const k = edge / Math.hypot(dx, dy);
+        cx = W / 2 + dx * k;
+        cy = H / 2 + dy * k;
+      }
       g.beginPath();
-      g.arc(px(cp.pos.x), pz(cp.pos.z), Math.max(4, cp.radius * sx), 0, Math.PI * 2);
+      g.arc(cx, cy, out ? 7 : Math.max(7, cp.radius * sx), 0, Math.PI * 2);
       g.fillStyle = color + '55';
       g.fill();
       g.strokeStyle = color;
@@ -519,7 +629,7 @@ export class GameEngine {
       g.font = '700 9px Inter, sans-serif';
       g.textAlign = 'center';
       g.textBaseline = 'middle';
-      g.fillText(p.id, px(cp.pos.x), pz(cp.pos.z));
+      g.fillText(p.id, cx, cy);
     }
     const myTeam = this.welcome.team;
     const allies = fighters.filter((f) => f.team === myTeam && f.state !== 'dead');
@@ -587,6 +697,7 @@ export class GameEngine {
       KeyR: Buttons.SPECIAL,
       KeyG: Buttons.SHOUT,
       Digit4: Buttons.HEAL,
+      Digit5: Buttons.QUICK_HEAL,
     };
     on('keydown', (e) => {
       if (e.target instanceof HTMLInputElement) return;
@@ -597,7 +708,7 @@ export class GameEngine {
         return;
       }
       if (e.code === 'KeyM') {
-        setMuted(!isMuted());
+        this.toggleMute();
         return;
       }
       if (e.code === 'KeyN') {
@@ -608,12 +719,21 @@ export class GameEngine {
         this.tabDownAt = performance.now();
         return;
       }
+      if (e.code === 'KeyZ' && this.inputEnabled) {
+        this.wheel = { x: 0, y: 0 };
+        this.cb.onWheel(this.wheel, false);
+        return;
+      }
       this.keys.add(e.code);
       const bit = LATCH[e.code];
       if (bit) this.latch |= bit;
     });
     on('keyup', (e) => {
       this.keys.delete(e.code);
+      if (e.code === 'KeyZ' && this.wheel) {
+        this.wheel = null;
+        this.cb.onWheel(null, true);
+      }
       if (e.code === 'Tab') {
         // Tab tocado = lock-on; segurado = placar.
         if (performance.now() - this.tabDownAt < 220) this.latch |= Buttons.LOCK;
@@ -628,10 +748,20 @@ export class GameEngine {
     const releaseAll = () => {
       this.keys.clear();
       this.mouse = 0;
+      if (this.wheel) {
+        this.wheel = null;
+        this.cb.onWheel(null, false);
+      }
       this.latch = 0;
       this.conn.sendInput({ moveX: 0, moveZ: 0, aim: this.yaw, buttons: 0 });
     };
     on('blur', releaseAll);
+    // Esc com o mouse preso: o navegador solta o lock sem mandar a tecla. Soltou sem a gente pedir = menu.
+    const onLock = () => {
+      if (document.pointerLockElement !== this.canvas && this.inputEnabled) this.cb.onMenu();
+    };
+    document.addEventListener('pointerlockchange', onLock);
+    this.cleanup.push(() => document.removeEventListener('pointerlockchange', onLock));
     const onVis = () => {
       if (document.hidden) releaseAll();
     };
@@ -640,7 +770,7 @@ export class GameEngine {
     on('mousedown', (e) => {
       // Com ou sem pointer lock: só não ataca ao clicar em botões do HUD.
       if (document.pointerLockElement !== this.canvas && e.target !== this.canvas) return;
-      if (!this.inputEnabled) return;
+      if (!this.inputEnabled || this.wheel) return;
       this.mouse = e.buttons;
       if (e.button === 0) this.latch |= Buttons.LIGHT;
       if (e.button === 1) {
@@ -653,7 +783,15 @@ export class GameEngine {
       // Sem lock (fallback), a câmera gira enquanto o mouse está sobre o canvas.
       const locked = document.pointerLockElement === this.canvas;
       if (!locked && (e.target !== this.canvas || !this.inputEnabled)) return;
-      this.pitch = Math.max(-0.35, Math.min(1.1, this.pitch + e.movementY * 0.0022));
+      if (this.wheel) {
+        const x = this.wheel.x + e.movementX;
+        const y = this.wheel.y + e.movementY;
+        const k = Math.min(1, 120 / Math.max(1, Math.hypot(x, y)));
+        this.wheel = { x: x * k, y: y * k };
+        this.cb.onWheel(this.wheel, false);
+        return;
+      }
+      this.pitch = Math.max(-0.35, Math.min(1.1, this.pitch + e.movementY * 0.0022 * this.sens));
       if (this.meNow?.lockTarget) {
         // Mira grudada: o mouse não gira a câmera; um puxão forte para o lado troca de alvo.
         const now = performance.now();
@@ -666,13 +804,13 @@ export class GameEngine {
         }
         return;
       }
-      this.yaw -= e.movementX * 0.0028;
+      this.yaw -= e.movementX * 0.0028 * this.sens;
     });
     on(
       'wheel',
       (e) => {
         if (document.pointerLockElement !== this.canvas && e.target !== this.canvas) return;
-        if (this.inputEnabled && Math.abs(e.deltaY) > 0) this.latch |= Buttons.LOCK_NEXT;
+        if (this.inputEnabled && Math.abs(e.deltaY) > 0) this.latch |= e.deltaY > 0 ? Buttons.WEAPON_NEXT : Buttons.WEAPON_PREV;
       },
       this.canvas,
     );
@@ -713,6 +851,14 @@ export class GameEngine {
     const me = this.meNow;
     const now = performance.now();
     if (!me || me.lockTarget) return this.yaw;
+    // Pistola e arremesso: sem assistência de soco. A mira do centro da tela passa pelo ombro (SHOULDER),
+    // então o tiro sai do boneco em direção ao ponto que a mira aponta a D metros.
+    if (me.weapon === 'pistola' || me.inHand) {
+      const D = me.inHand ? DEFAULT_CONSTANTS.throwables.range : 15;
+      const fwd = dirFromYaw(this.yaw);
+      const right = dirFromYaw(this.yaw - Math.PI / 2);
+      return yawTo(me.pos, { x: me.pos.x + right.x * SHOULDER + fwd.x * D, z: me.pos.z + right.z * SHOULDER + fwd.z * D });
+    }
     if (buttons & (Buttons.LIGHT | Buttons.HEAVY | Buttons.KICK) && (!this.assist || now > this.assist.until)) {
       let best: FighterSnapshot | null = null;
       let bestScore = Infinity;
@@ -744,10 +890,23 @@ export class GameEngine {
     this.camera.updateProjectionMatrix();
   }
 
+  private adaptQuality(fps: number, dt: number): void {
+    const next = stepQuality(this.quality, fps, dt);
+    const changed = next.level !== this.quality.level;
+    this.quality = next;
+    if (!changed) return;
+    const q = QUALITY_LEVELS[next.level]!;
+    this.renderer.setPixelRatio(Math.min(q.pixelRatio, window.devicePixelRatio));
+    this.resize();
+    if (this.sun) this.sun.castShadow = q.shadows;
+  }
+
   private readonly frame = (now: number): void => {
     this.raf = requestAnimationFrame(this.frame);
     const dt = Math.min(0.1, (now - this.last) / 1000);
     this.last = now;
+    this.frameMs += (dt * 1000 - this.frameMs) * 0.1;
+    if (this.scene && !document.hidden) this.adaptQuality(1000 / this.frameMs, dt);
 
     // Um input por tick de simulação.
     this.inputAcc += dt * 1000;
@@ -790,7 +949,8 @@ export class GameEngine {
       let v = this.views.get(f.id);
       // O primeiro snapshot pode chegar antes do roster: quando o roster chega, remonta com nick e visual.
       const r = this.roster[f.id];
-      const key = `${r?.nick ?? ''}|${r?.visual ? JSON.stringify(r.visual) : ''}`;
+      // O modelo glTF chega depois do primeiro snapshot: quando chega, remonta com ele.
+      const key = `${r?.nick ?? ''}|${r?.visual ? JSON.stringify(r.visual) : ''}|${fighterAsset() ? 'glb' : ''}`;
       if (v && this.viewKeys.get(f.id) !== key) {
         this.scene.remove(v.root);
         v.dispose();
@@ -812,6 +972,7 @@ export class GameEngine {
     this.lastFighters = sample.fighters;
     for (const [id, v] of this.views) v.setLocked(!!me && me.lockTarget === id);
     this.fx?.update(dt);
+    this.throwFx?.update(dt, this.conn.latest, this.conn.serverTick(now));
     for (const [id, v] of this.views) {
       if (!seen.has(id)) {
         this.scene.remove(v.root);
@@ -833,10 +994,11 @@ export class GameEngine {
       this.yaw += d * Math.min(1, dt * 14);
     }
 
-    // Câmera em 3ª pessoa por cima do ombro.
+    // Câmera em 3ª pessoa por cima do ombro. V segurado: olha para trás (só a câmera; o boneco segue para a frente).
     if (me && this.map) {
-      const fwd = dirFromYaw(this.yaw);
-      const right = dirFromYaw(this.yaw - Math.PI / 2);
+      const viewYaw = this.yaw + (this.keys.has('KeyV') ? Math.PI : 0);
+      const fwd = dirFromYaw(viewYaw);
+      const right = dirFromYaw(viewYaw - Math.PI / 2);
       const pivot = new THREE.Vector3(me.pos.x + right.x * SHOULDER, 1.65, me.pos.z + right.z * SHOULDER);
       const horiz = Math.cos(this.pitch) * CAM_DIST;
       const cam = new THREE.Vector3(pivot.x - fwd.x * horiz, pivot.y + Math.sin(this.pitch) * CAM_DIST, pivot.z - fwd.z * horiz);
@@ -853,6 +1015,12 @@ export class GameEngine {
       cam.x += Math.sin(now * 0.09) * this.shake;
       cam.y += Math.cos(now * 0.11) * this.shake;
       this.camera.position.copy(cam);
+      // Sombra: a câmera de sombra (±50 m) acompanha o jogador; o mapa é grande demais para cobrir inteiro.
+      if (this.sun) {
+        this.sun.position.set(me.pos.x - 25, 40, me.pos.z - 20);
+        this.sun.target.position.set(me.pos.x, 0, me.pos.z);
+        this.sun.target.updateMatrixWorld();
+      }
       this.camera.lookAt(pivot.x + fwd.x * 3, pivot.y - 0.2, pivot.z + fwd.z * 3);
     }
     this.renderer.render(this.scene, this.camera);
@@ -880,6 +1048,15 @@ export class GameEngine {
         pointerLocked: document.pointerLockElement === this.canvas,
         lockTargetNick: target ? this.name(target.id) : null,
         rtt: this.conn.rtt,
+        perf: import.meta.env.DEV
+          ? {
+              fps: Math.round(1000 / this.frameMs),
+              ms: this.frameMs,
+              calls: this.renderer.info.render.calls,
+              tris: this.renderer.info.render.triangles,
+              quality: this.quality.level,
+            }
+          : null,
         ...this.contextHints(me, sample.fighters, sample.match.points),
         muted: isMuted(),
         musicOn: isMusicOn(),

@@ -1,13 +1,19 @@
-import { TORCIDAS } from '@torcidas/shared';
+import { randomVisual, TORCIDAS } from '@torcidas/shared';
 import { useEffect, useState } from 'react';
 import { authClient } from '../api';
-import { Crest, GoogleButton } from './kit';
+import { CharacterPreview } from './CharacterPreview';
+import { GoogleButton } from './kit';
+import './screens.css';
 
 // O Google volta para cá; em caso de erro o Better Auth acrescenta ?error=<código>.
 function signInWithGoogle() {
   const home = window.location.origin + window.location.pathname;
   return authClient.signIn.social({ provider: 'google', callbackURL: home, errorCallbackURL: home });
 }
+
+// Dois lutadores se encarando, um de cada torcida (sorteio fixo: a capa não muda a cada visita).
+const LEFT = randomVisual(7);
+const RIGHT = randomVisual(31);
 
 export function Login({ initialError }: { initialError: string | null }) {
   const [error, setError] = useState(initialError);
@@ -33,37 +39,40 @@ export function Login({ initialError }: { initialError: string | null }) {
     );
   }
 
+  const [a, b] = TORCIDAS;
   return (
-    <main className="screen home">
-      <header className="brand">
-        <h1>Torcidas</h1>
-        <p>Briga 10×10 no estacionamento do estádio</p>
+    <main className="ln">
+      <div className="ln-lights" aria-hidden="true" />
+      <header className="ln-top">
+        <span className="ln-mark">T</span>
+        <span className="ln-tag">Alfa · Fortaleza</span>
       </header>
-      <section className="versus">
-        <div className="vs-side mine">
-          <Crest torcida={TORCIDAS[0]} size={72} />
-          <b>{TORCIDAS[0].nome}</b>
-        </div>
-        <span className="vs">×</span>
-        <div className="vs-side mine">
-          <Crest torcida={TORCIDAS[1]} size={72} />
-          <b>{TORCIDAS[1].nome}</b>
-        </div>
+
+      <section className="ln-stage">
+        <h1 className="ln-word">Torcidas</h1>
+        <figure className="ln-fighter left">
+          <CharacterPreview team={0} visual={LEFT} facing={0.55} still className="ln-canvas" />
+          <figcaption style={{ ['--c' as string]: a.cores[1] }}>{a.nome}</figcaption>
+        </figure>
+        <span className="ln-x" aria-hidden="true">×</span>
+        <figure className="ln-fighter right">
+          <CharacterPreview team={1} visual={RIGHT} facing={-0.55} still className="ln-canvas" />
+          <figcaption style={{ ['--c' as string]: b.cores[1] }}>{b.nome}</figcaption>
+        </figure>
       </section>
-      <section className="profile-card login">
-        <div className="login-copy">
-          <h2>Bora pro estacionamento</h2>
-          <p>Entre, escolha o seu lado e o seu nick. Leva menos de um minuto.</p>
-        </div>
+
+      <section className="ln-panel" aria-labelledby="ln-title">
+        <h2 id="ln-title">A briga é lá fora.</h2>
+        <p>10 contra 10, do lado de fora do estádio. Escolha a torcida, o nick e a cara do seu lutador.</p>
         <GoogleButton onClick={login} disabled={redirecting}>
           {redirecting ? 'Abrindo o Google…' : 'Entrar com Google'}
         </GoogleButton>
         {error && (
-          <p className="banner danger" role="alert">
+          <p className="ln-error" role="alert">
             {error}
           </p>
         )}
-        <small className="fine">Usamos só o seu nome e a sua foto do Google. Nada é postado na sua conta.</small>
+        <small>Usamos só o seu nome e a sua foto do Google. Nada é postado na sua conta.</small>
       </section>
     </main>
   );

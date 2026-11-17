@@ -2,6 +2,7 @@ import {
   type ClientMessage,
   type Fighter,
   type FighterSnapshot,
+  type GasCloud,
   type MatchEvent,
   type MatchResult,
   type MatchSnapshotInfo,
@@ -10,6 +11,7 @@ import {
   type RosterEntry,
   type ServerMessage,
   type TeamSide,
+  type Throwable,
   TICK_MS,
 } from '@torcidas/shared';
 
@@ -22,6 +24,8 @@ interface Snap {
   recvAt: number;
   match: MatchSnapshotInfo;
   fighters: Map<string, FighterSnapshot>;
+  throws: Throwable[];
+  clouds: GasCloud[];
 }
 
 /** Atraso mínimo de interpolação em ticks: snapshots chegam a cada 2 ticks; 4 cobre jitter. */
@@ -85,6 +89,10 @@ export class GameConnection {
     this.send({ t: 'buy', item });
   }
 
+  equip(item: string): void {
+    this.send({ t: 'equip', item });
+  }
+
   private receive(msg: ServerMessage): void {
     switch (msg.t) {
       case 'welcome':
@@ -94,7 +102,7 @@ export class GameConnection {
         this.h.onRoster(msg.players);
         break;
       case 'snapshot':
-        this.snaps.push({ tick: msg.tick, recvAt: performance.now(), match: msg.match, fighters: new Map(msg.fighters.map((f) => [f.id, f])) });
+        this.snaps.push({ tick: msg.tick, recvAt: performance.now(), match: msg.match, fighters: new Map(msg.fighters.map((f) => [f.id, f])), throws: msg.throws ?? [], clouds: msg.clouds ?? [] });
         if (this.snaps.length > 30) this.snaps.shift();
         this.h.onSnapshot(msg.tick, msg.ackSeq, msg.self, msg.fighters);
         break;

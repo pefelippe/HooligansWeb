@@ -139,6 +139,7 @@ function playerInput(): PlayerInput {
   if (keys.has('KeyR')) buttons |= Buttons.SPECIAL;
   if (keys.has('KeyG')) buttons |= Buttons.SHOUT;
   if (keys.has('Digit4')) buttons |= Buttons.HEAL;
+  if (keys.has('Digit5')) buttons |= Buttons.QUICK_HEAL;
   if (keys.has('KeyX')) buttons |= Buttons.USE;
   if (keys.has('KeyE')) buttons |= Buttons.SHOVE;
   if (keys.has('KeyQ')) buttons |= Buttons.KICK;

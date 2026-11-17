@@ -55,6 +55,8 @@ Além do **Jogar** (partida rápida 10×10), a home tem **Salas**: públicas (ap
 | `apps/web` | React + Three.js: home, escolha de torcida, partida 3D (HUD, loja, placar, resultado). |
 | `tools/combat-lab` | Ferramenta de ajuste do combate. |
 
+O lutador 3D (`apps/web/public/models/fighter.glb`) vem dos pacotes CC0 do Quaternius (Universal Base Characters e Universal Animation Library 1 e 2, versões Standard). Para regenerar: extraia os zips em `assets-src/quaternius/` (ignorado pelo git) e rode `pnpm --filter @torcidas/web models`.
+
 ## Ainda falta (próximos marcos)
 
 - Predição no cliente e compensação de lag: hoje tudo é desenhado a partir de snapshots interpolados, com ~70 ms de atraso.
