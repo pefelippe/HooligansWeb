@@ -172,6 +172,9 @@ export class GameMatch {
       if (this.autoBots || this.humans(c.team) + this.bots(c.team) >= this.maxPerTeam) this.removeOneBot(c.team);
       addPlayer(this.state, { id: c.userId, nick: c.nick, team: c.team, bot: false, ...(c.level ? { level: c.level } : {}), ...(c.visual ? { visual: c.visual } : {}) });
     }
+    // Mesma conta conectando de novo (outra aba, ou voltou antes do servidor notar a queda): a nova vale.
+    const prev = this.clients.get(c.userId);
+    if (prev && prev !== c) prev.close(4010, 'conectado em outro lugar');
     this.clients.set(c.userId, c);
     c.send({ t: 'welcome', you: c.userId, matchId: this.id, team: c.team, tick: this.state.sim.tick, seed: this.seed });
     this.broadcastRoster();
@@ -179,7 +182,9 @@ export class GameMatch {
     return true;
   }
 
-  leave(userId: string): void {
+  /** `client`: a conexão que fechou. Se o jogador já está numa conexão mais nova, não faz nada. */
+  leave(userId: string, client?: MatchClient): void {
+    if (client && this.clients.get(userId) !== client) return;
     this.clients.delete(userId);
     this.inputs.delete(userId);
     const r = this.state.roster[userId];

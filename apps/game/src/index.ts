@@ -4,7 +4,7 @@ import { jwtVerify, SignJWT } from 'jose';
 import { randomInt, randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage } from 'node:http';
 import { WebSocketServer } from 'ws';
-import { GameMatch } from './match';
+import { GameMatch, type MatchClient } from './match';
 import { type Room, RoomManager } from './rooms';
 
 const isProd = process.env.NODE_ENV === 'production';
@@ -50,7 +50,8 @@ function ticketLevel(level: unknown): number {
  * vaga no time e pelo menos 1 min de jogo; senão cria uma. Partidas de sala ficam de fora.
  */
 function allocate(team: TeamSide, userId: string | null): GameMatch {
-  if (userId) for (const m of matches.values()) if (m.roomId === null && m.playing && m.isAway(userId)) return m;
+  // Ainda no roster (caiu, ou o servidor nem notou a queda): volta para a mesma partida.
+  if (userId) for (const m of matches.values()) if (m.roomId === null && m.playing && m.state.roster[userId]) return m;
   for (const m of matches.values()) {
     if (m.roomId === null && m.playing && m.humans(team) < MATCH.teamSize && m.ticksLeft() > Math.min(60 * TICK_RATE, (durationTicks ?? MATCH.durationTicks) / 2)) return m;
   }
@@ -177,7 +178,7 @@ const http = createServer(async (req, res) => {
 const wss = new WebSocketServer({ server: http, maxPayload: 4096 });
 
 wss.on('connection', (ws) => {
-  let joined: { match: GameMatch; userId: string } | null = null;
+  let joined: { match: GameMatch; userId: string; client: MatchClient } | null = null;
   let lobby: { room: Room; userId: string; send: (msg: LobbyServerMessage) => void } | null = null;
   const send = (msg: ServerMessage) => {
     if (ws.readyState !== ws.OPEN) return;
@@ -230,8 +231,9 @@ wss.on('connection', (ws) => {
         // O ticket é assinado pela API, mas o visual é revalidado aqui (formato desconhecido = sem visual).
         const visual = validateVisual(payload.visual) ?? undefined;
         const close = (code: number, reason: string) => ws.close(code, reason);
-        if (!match.join({ userId: payload.userId, nick: payload.nick, team: payload.team, level: ticketLevel(payload.level), ...(visual ? { visual } : {}), send, close })) return ws.close(4006, 'sem vaga na partida');
-        joined = { match, userId: payload.userId };
+        const client = { userId: payload.userId, nick: payload.nick, team: payload.team, level: ticketLevel(payload.level), ...(visual ? { visual } : {}), send, close };
+        if (!match.join(client)) return ws.close(4006, 'sem vaga na partida');
+        joined = { match, userId: payload.userId, client };
       } catch {
         ws.close(4004, 'ticket inválido');
       }
@@ -256,7 +258,7 @@ wss.on('connection', (ws) => {
   ws.on('close', () => {
     clearTimeout(helloTimeout);
     clearInterval(refill);
-    joined?.match.leave(joined.userId);
+    joined?.match.leave(joined.userId, joined.client);
     if (lobby) lobby.room.leave(lobby.userId, lobby.send);
   });
 });

@@ -1,6 +1,6 @@
 # Torcidas
 
-Briga 10×10 no estacionamento do estádio: **Cearalove × Lions do Pici**. As vagas sem jogador são completadas com bots.
+Briga 10×10 no estacionamento do estádio (mapa de 150×80 m com três zonas: carros, esplanada e barracas): **Cearalove × Lions do Pici**. As vagas sem jogador são completadas com bots.
 
 ## Rodando
 
@@ -13,6 +13,7 @@ pnpm lab                                      # combat lab :5174 (você x boneco
 pnpm test
 pnpm --filter @torcidas/game smoke            # fluxo completo contra api+game rodando
 pnpm --filter @torcidas/game rooms-smoke      # salas: criar, entrar por código, bots, começar, expulsar
+pnpm --filter @torcidas/game load 5 20       # carga: 5 partidas cheias de bots por 20 s (tick e tamanho do snapshot)
 ```
 
 O login é com Google. Crie um OAuth Client ID do tipo *Web application* no Google Cloud, com a redirect URI `http://localhost:3000/api/auth/callback/google`, preencha `GOOGLE_CLIENT_ID` e `GOOGLE_CLIENT_SECRET` no `.env` e reinicie o `pnpm dev`. No primeiro login o jogador escolhe torcida e nick (sugerido a partir do nome da conta). Para testar com 2 jogadores, entre com outra conta numa janela anônima.
@@ -59,9 +60,10 @@ O lutador 3D (`apps/web/public/models/fighter.glb`) vem dos pacotes CC0 do Quate
 
 ## Ainda falta (próximos marcos)
 
-- Predição no cliente e compensação de lag: hoje tudo é desenhado a partir de snapshots interpolados, com ~70 ms de atraso.
-- Fila por torcida no Redis com vários game servers.
-- Modelos glTF rigados no lugar dos bonecos procedurais.
-- Chat, moderação e deploy.
+- Snapshot por diferença (delta contra o último confirmado): hoje vai o estado inteiro em binário, ~3,7 KB a 30 Hz por jogador.
+- Salas e fila no Redis, para ter mais de um game server. Com um servidor só (Fortaleza), ficam na memória.
+- Props CC0 no cenário e ajuste fino do combate jogando (combat lab).
+- Polícia como terceira facção: `TeamSide`, `PerTeam` e `TEAM_COUNT` em `combat/types.ts`.
+- Sentry, deploy do game server em Fortaleza, chat e moderação.
 
 Variáveis de ambiente: veja `.env.example`. `MATCH_DURATION_S` (só em dev) encurta as partidas para teste.

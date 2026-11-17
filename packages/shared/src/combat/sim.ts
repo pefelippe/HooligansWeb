@@ -989,8 +989,8 @@ function knockAway(e: Fighter, from: Vec2, force: number, data: CombatData): voi
   enterState(e, 'knockdown', data.constants.knockdownTicks);
 }
 
-/** Altura do arremesso para o teste de parede: acima de carro (1,45) e grade (2,2). */
-const THROW_ARC_Y = 2.4;
+/** Altura do arremesso para o teste de parede: acima de carro (1,45), grade (2,2) e barraca (2,4). */
+const THROW_ARC_Y = 2.5;
 
 function throwItem(s: SimState, f: Fighter, kind: Throwable['kind'], yaw: number, data: CombatData, events: SimEvent[]): void {
   const c = data.constants.throwables;
