@@ -4,7 +4,7 @@ import type { PlayerInput } from './combat/input';
 import { buy, type BuyResult } from './combat/shop';
 import { createFighter, createSim, equipItem, type SimEvent, type SimState, spawnPoint, step } from './combat/sim';
 import { addMoney, ECONOMY } from './combat/economy';
-import { type TeamSide, TICK_RATE, type Vec2 } from './combat/types';
+import { type PerTeam, perTeam, TEAM_COUNT, TEAMS, type TeamSide, TICK_RATE, type Vec2 } from './combat/types';
 import { DEFAULT_COMBAT_DATA } from './combat/weapons';
 import { type ControlPointDef, type GameMap, generateMap, inRect } from './map';
 import type { CharacterVisual } from './visual';
@@ -69,11 +69,11 @@ export interface MatchResult {
   mode: MatchMode;
   winner: TeamSide | null;
   /** Placar por time: nocautes + pontos de controle. */
-  score: [number, number];
+  score: PerTeam;
   /** Quanto do placar veio dos pontos de controle. */
-  pointScore: [number, number];
+  pointScore: PerTeam;
   /** Capturas de bandeirão por time (bandeirão). */
-  captures: [number, number];
+  captures: PerTeam;
   mvp: string | null;
   players: PlayerResult[];
 }
@@ -95,10 +95,11 @@ export interface MatchState {
   map: GameMap;
   sim: SimState;
   /** Placar por time: nocautes + pontos de controle (briga). */
-  score: [number, number];
+  score: PerTeam;
   /** Parte do placar que veio dos pontos de controle. */
-  pointScore: [number, number];
-  captures: [number, number];
+  pointScore: PerTeam;
+  captures: PerTeam;
+  /** shortcut: bandeirão é só entre as 2 torcidas (times 0 e 1); polícia fica fora do modo. */
   flags: [FlagState, FlagState];
   /** Pontos de controle A, B, C (só valem na briga). */
   points: ControlPointState[];
@@ -118,7 +119,7 @@ export type FlagEvent =
   | { type: 'flagTaken'; tick: number; team: TeamSide; by: string }
   | { type: 'flagDropped'; tick: number; team: TeamSide; pos: Vec2 }
   | { type: 'flagReturned'; tick: number; team: TeamSide; by: string | null }
-  | { type: 'flagCaptured'; tick: number; team: TeamSide; by: string; captures: [number, number] };
+  | { type: 'flagCaptured'; tick: number; team: TeamSide; by: string; captures: PerTeam };
 
 export type MatchEvent = SimEvent | FlagEvent | PointEvent | { type: 'matchEnd'; tick: number; result: MatchResult };
 
@@ -146,9 +147,9 @@ export function createMatch(id: string, seed: number, durationTicks: number = MA
     mode,
     map,
     sim,
-    score: [0, 0],
-    pointScore: [0, 0],
-    captures: [0, 0],
+    score: perTeam(),
+    pointScore: perTeam(),
+    captures: perTeam(),
     flags: [flag(0), flag(1)],
     points: map.controlPoints.map((cp) => ({ id: cp.id, pos: { ...cp.pos }, radius: cp.radius, owner: null, capTeam: null, progress: 0, contested: false })),
     playerCaptures: {},
@@ -251,7 +252,7 @@ function stepFlags(m: MatchState, events: MatchEvent[]): void {
         m.playerCaptures[carrier.id] = (m.playerCaptures[carrier.id] ?? 0) + 1;
         carrier.money = addMoney(carrier.money, ECONOMY.ko * 2);
         for (const f of m.sim.fighters) if (f.team === enemyTeam && f !== carrier) f.money = addMoney(f.money, ECONOMY.assist);
-        events.push({ type: 'flagCaptured', tick, team: enemyTeam, by: carrier.id, captures: [m.captures[0], m.captures[1]] });
+        events.push({ type: 'flagCaptured', tick, team: enemyTeam, by: carrier.id, captures: [...m.captures] });
         returnFlag(m, fl, null, []);
       }
       continue;
@@ -297,8 +298,11 @@ export function stepMatch(m: MatchState, inputs: Readonly<Record<string, PlayerI
     if (e.type !== 'ko') continue;
     const victim = m.sim.fighters.find((f) => f.id === e.target);
     if (!victim) continue;
-    // Nocaute conta para o time adversário da vítima (inclusive sangramento e dano da sede).
-    const scorer: TeamSide = victim.team === 0 ? 1 : 0;
+    // Nocaute conta para o time de quem derrubou. Sem autor (sangramento, dano da sede) vai para o rival,
+    // o que só tem dono certo com 2 facções.
+    const killerTeam = m.sim.fighters.find((f) => f.id === e.killer)?.team;
+    const scorer = killerTeam !== undefined && killerTeam !== victim.team ? killerTeam : TEAM_COUNT === 2 ? TEAMS.find((t) => t !== victim.team) ?? null : null;
+    if (scorer === null) continue;
     m.score[scorer]++;
     // Virada: quem cai pelo time que está perdendo recebe um extra para se armar.
     const lead = m.mode === 'bandeirao' ? m.captures : m.score;
@@ -325,11 +329,12 @@ function stepPoints(m: MatchState, events: MatchEvent[]): void {
   const s = m.sim;
   const raca = DEFAULT_COMBAT_DATA.constants.raca.max;
   for (const p of m.points) {
-    const inside: [Fighter[], Fighter[]] = [[], []];
+    const inside = perTeam<Fighter[]>(() => []);
     for (const f of s.fighters) if (isStanding(f) && dist(f.pos, p.pos) <= p.radius) inside[f.team].push(f);
-    p.contested = inside[0].length > 0 && inside[1].length > 0;
-    if (p.contested || (!inside[0].length && !inside[1].length)) continue;
-    const team: TeamSide = inside[0].length ? 0 : 1;
+    const present = TEAMS.filter((t) => inside[t].length > 0);
+    p.contested = present.length > 1;
+    if (present.length !== 1) continue;
+    const team = present[0] as TeamSide;
     const rate = Math.min(CONTROL.maxSpeedup, 1 + 0.5 * (inside[team].length - 1)) / CONTROL.captureTicks;
     if (p.owner === team) {
       // Recupera a própria barra.
@@ -377,13 +382,17 @@ export function computeResult(m: MatchState): MatchResult {
       captures: m.playerCaptures[f.id] ?? 0,
     };
   });
-  const [a, b] = m.score;
-  const [ca, cb] = m.captures;
-  let winner: TeamSide | null;
-  if (m.mode === 'bandeirao' && ca !== cb) winner = ca > cb ? 0 : 1;
-  else winner = a === b ? null : a > b ? 0 : 1; // desempate (ou briga): nocautes
+  // Bandeirão: mais capturas; empate (ou briga) vai pelo placar.
+  const winner = (m.mode === 'bandeirao' ? leader(m.captures) : null) ?? leader(m.score);
   const ranked = [...players].sort((p, q) => q.captures - p.captures || q.kos - p.kos || q.assists - p.assists || p.deaths - q.deaths);
-  return { mode: m.mode, winner, score: [a, b], pointScore: [...m.pointScore], captures: [ca, cb], mvp: ranked[0]?.id ?? null, players };
+  return { mode: m.mode, winner, score: [...m.score], pointScore: [...m.pointScore], captures: [...m.captures], mvp: ranked[0]?.id ?? null, players };
+}
+
+/** Time com o maior valor, ou null se houver empate no topo. */
+export function leader(values: Readonly<PerTeam>): TeamSide | null {
+  const top = Math.max(...values);
+  const at = TEAMS.filter((t) => values[t] === top);
+  return at.length === 1 ? (at[0] as TeamSide) : null;
 }
 
 export function aliveCount(m: MatchState, team: TeamSide): number {

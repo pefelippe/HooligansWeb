@@ -1,3 +1,4 @@
+import type { TeamSide } from './combat/types';
 // Torcidas do jogo. O engine trata cada torcida como dado: nome, cidade, cores, sede e rivais.
 
 export interface Torcida {
@@ -11,7 +12,7 @@ export interface Torcida {
   sede: string;
   rivais: readonly string[];
   /** Lado fixo no mapa: 0 = oeste, 1 = leste. */
-  team: 0 | 1;
+  team: TeamSide;
 }
 
 export const TORCIDAS = [
@@ -27,7 +28,7 @@ export function getTorcida(id: string): Torcida | undefined {
   return BY_ID.get(id);
 }
 
-export function torcidaOfTeam(team: 0 | 1): Torcida {
+export function torcidaOfTeam(team: TeamSide): Torcida {
   return TORCIDAS[team];
 }
 

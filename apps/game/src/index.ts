@@ -1,4 +1,4 @@
-import type { ClientMessage, LobbyClientMessage, LobbyServerMessage, MatchResult, MatchTicketClaims, RoomTicketClaims, ServerMessage, TeamSide } from '@torcidas/shared';
+import { type ClientMessage, isTeam, type LobbyClientMessage, type LobbyServerMessage, type MatchResult, type MatchTicketClaims, type RoomTicketClaims, type ServerMessage, type TeamSide } from '@torcidas/shared';
 import { MATCH, PROTOCOL_VERSION, ROOM, TICK_MS, TICK_RATE, validateVisual } from '@torcidas/shared';
 import { jwtVerify, SignJWT } from 'jose';
 import { randomInt, randomUUID } from 'node:crypto';
@@ -138,7 +138,7 @@ const http = createServer(async (req, res) => {
   if (req.url === '/internal/allocate' && req.method === 'POST') {
     if (req.headers['x-internal-secret'] !== internalSecret) return json(403, { error: 'proibido' });
     const body = (await readJson(req).catch(() => ({}))) as { team?: unknown };
-    if (body.team !== 0 && body.team !== 1) return json(400, { error: 'time_invalido' });
+    if (!isTeam(body.team)) return json(400, { error: 'time_invalido' });
     return json(200, { matchId: allocate(body.team).id });
   }
   if (req.url?.startsWith('/internal/rooms')) {
@@ -154,7 +154,7 @@ const http = createServer(async (req, res) => {
     }
     if (req.url === '/internal/rooms/check' && req.method === 'POST') {
       const { code, userId, team } = body;
-      if (typeof code !== 'string' || typeof userId !== 'string' || (team !== 0 && team !== 1)) return json(400, { error: 'invalido' });
+      if (typeof code !== 'string' || typeof userId !== 'string' || !isTeam(team)) return json(400, { error: 'invalido' });
       const room = rooms.byCodeOf(code);
       if (!room) return json(404, { error: 'sala_inexistente' });
       const err = room.canJoin(userId, team);

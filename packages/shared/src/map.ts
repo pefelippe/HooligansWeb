@@ -1,4 +1,4 @@
-import type { Vec2 } from './combat/types';
+import type { TeamSide, Vec2 } from './combat/types';
 import { nextRandom } from './rng';
 
 // Mapa: entorno do Castelão, com a sede (galpão) de cada torcida nas pontas.
@@ -31,7 +31,7 @@ export interface Box {
   /** Cor (hex), só para renderização. */
   color: string;
   /** Galpão: de qual time é a parede. */
-  team?: 0 | 1;
+  team?: TeamSide;
 }
 
 export interface Circle {
@@ -50,7 +50,7 @@ export interface Rect {
 
 /** Sede = galpão entrável. */
 export interface SedeDef {
-  team: 0 | 1;
+  team: TeamSide;
   /** Ponto de spawn (fundo do galpão). */
   spawn: Vec2;
   /** Onde fica o bandeirão. */
@@ -99,7 +99,7 @@ export const CONTROL_POINT_RADIUS = 6;
 /** Galpão: 24 m (x) × 20 m (z), portão grande virado para o centro e um portão em cada lateral. */
 export const GALPAO = { hw: 12, hd: 10, wall: 0.3, height: 6, frontDoor: 7, sideDoor: 4 };
 
-function galpao(team: 0 | 1, boxes: Box[]): SedeDef {
+function galpao(team: TeamSide, boxes: Box[]): SedeDef {
   const side = team === 0 ? -1 : 1;
   const cx = side * (MAP_HALF_W - GALPAO.hw - 3); // ±85
   const cz = 0;

@@ -3,7 +3,7 @@ import { dist, yawTo } from './combat/geometry';
 import { Buttons, type PlayerInput } from './combat/input';
 import { BANDAGEM, BOMBA, canBuy, CURATIVO, GAS } from './combat/shop';
 import { canRevive, downedAllyInRange, inSede } from './combat/sim';
-import type { Vec2 } from './combat/types';
+import type { TeamSide, Vec2 } from './combat/types';
 import { DEFAULT_COMBAT_DATA } from './combat/weapons';
 import { inRect, LANES, MAP_HALF_W } from './map';
 import { type ControlPointState, type MatchState, matchBuy } from './match';
@@ -212,7 +212,7 @@ function decide(m: MatchState, brain: BotBrain): PlayerInput {
   // ------------------------------------------------------------ bandeirão
   if (m.mode === 'bandeirao') {
     const myTeam = self.team;
-    const enemyTeam = myTeam === 0 ? 1 : 0;
+    const enemyTeam = myTeam === 0 ? 1 : 0; // bandeirão: só as 2 torcidas
     const ownFlag = m.flags[myTeam];
     const enemyFlag = m.flags[enemyTeam];
     const go = (p: Vec2, run = true): PlayerInput => {
@@ -289,7 +289,7 @@ function decide(m: MatchState, brain: BotBrain): PlayerInput {
   // Caçadores seguem caçando; o resto disputa os pontos: só para para brigar com quem encostar
   // ou com inimigo dentro da praça (que impede a captura).
   if (m.mode === 'briga' && m.points.length && brain.role !== 'cacador' && brain.mode !== 'recuar') {
-    const goal = pointGoal(m, self.team, brain.pointPref);
+    const goal = pointGoal(m, self.team, mySede, brain.pointPref);
     if (goal) {
       const justHit = s.tick - self.lastCombatTick < 45;
       const adjacent = standingEnemies.find((f) => dist(f.pos, self.pos) < (justHit ? 3.5 : 2));
@@ -319,7 +319,7 @@ function decide(m: MatchState, brain: BotBrain): PlayerInput {
   }
   if (!target) {
     // Sem alvo à vista: avança pelo estacionamento até um ponto de encontro (varia por bot).
-    const rally = { x: (self.team === 0 ? 1 : -1) * (brain.aggression - 0.5) * 16, z: (brain.aggression * 37) % 1 > 0.5 ? 2 : -2 };
+    const rally = { x: -(Math.sign(mySede.x) || -1) * (brain.aggression - 0.5) * 16, z: (brain.aggression * 37) % 1 > 0.5 ? 2 : -2 };
     if (dist(self.pos, rally) < 1.5) return { ...idle, aim: self.facing };
     return { ...moveTo(rally), aim: yawTo(self.pos, rally), buttons: 0 };
   }
@@ -429,8 +429,9 @@ export function slotsTaken(fighters: readonly Fighter[], self: Fighter, target: 
   return n;
 }
 
-function pointGoal(m: MatchState, team: 0 | 1, pref: number): ControlPointState | undefined {
-  const pts = team === 0 ? m.points : [...m.points].reverse();
+function pointGoal(m: MatchState, team: TeamSide, home: Vec2, pref: number): ControlPointState | undefined {
+  // Do ponto mais perto da própria sede para o mais longe.
+  const pts = [...m.points].sort((a, b) => dist(a.pos, home) - dist(b.pos, home));
   const preferred = pts[pref % pts.length];
   const notOurs = (p: ControlPointState) => p.owner !== team || p.contested || p.progress < 1;
   if (preferred && notOurs(preferred)) return preferred;

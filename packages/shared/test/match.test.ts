@@ -17,6 +17,8 @@ import {
   type PlayerInput,
   resolveCircleCollision,
   inRect,
+  isTeam,
+  leader,
   type MatchState,
   stepMatch,
 } from '../src';
@@ -413,5 +415,19 @@ describe('pontos de controle (briga)', () => {
       stepMatch(m, inputs);
     }
     expect(m.points.filter((p) => p.owner !== null).length).toBeGreaterThan(0);
+  });
+});
+
+describe('facções', () => {
+  it('leader: maior valor vence, empate no topo é null', () => {
+    expect(leader([3, 1])).toBe(0);
+    expect(leader([1, 3])).toBe(1);
+    expect(leader([2, 2])).toBeNull();
+  });
+
+  it('isTeam só aceita índices de facção válidos', () => {
+    expect(isTeam(0)).toBe(true);
+    expect(isTeam(1)).toBe(true);
+    for (const bad of [-1, 2, 0.5, '0', null, undefined]) expect(isTeam(bad)).toBe(false);
   });
 });

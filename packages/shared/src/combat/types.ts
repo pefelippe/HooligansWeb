@@ -8,7 +8,24 @@ export interface Vec2 {
   z: number;
 }
 
+/**
+ * Índice da facção. Hoje as 2 torcidas. Para a polícia: vira `0 | 1 | 2`, `PerTeam` ganha um T
+ * e `TEAM_COUNT` = 3; o compilador aponta o resto.
+ */
 export type TeamSide = 0 | 1;
+export type PerTeam<T = number> = [T, T];
+export const TEAM_COUNT = 2;
+export const TEAMS: readonly TeamSide[] = [0, 1];
+
+/** Validação na borda (mensagens de cliente, HTTP interno). */
+export function isTeam(t: unknown): t is TeamSide {
+  return Number.isInteger(t) && (t as number) >= 0 && (t as number) < TEAM_COUNT;
+}
+
+/** Um valor por facção (placar, capturas, bots). */
+export function perTeam<T = number>(make: () => T = () => 0 as T): PerTeam<T> {
+  return TEAMS.map(make) as PerTeam<T>;
+}
 
 export type Hitbox =
   /** Arco à frente do atacante: alcance em metros, meia-abertura em graus. */

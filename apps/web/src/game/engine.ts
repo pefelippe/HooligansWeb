@@ -1032,6 +1032,7 @@ export class GameEngine {
     if (this.hudAcc >= 0.1) {
       this.hudAcc = 0;
       const sedes = this.map?.sedes;
+      const myTeam = this.welcome.team;
       const inSede = (team: number) => !!(me && sedes?.[team] && inRect(me.pos, sedes[team].area));
       const tick = this.conn.serverTick(now);
       this.cb.onHud({
@@ -1043,7 +1044,7 @@ export class GameEngine {
         fighters: sample.fighters,
         roster: this.roster,
         inOwnSede: inSede(this.welcome.team),
-        inEnemySede: inSede(this.welcome.team === 0 ? 1 : 0),
+        inEnemySede: !!sedes?.some((sd) => sd.team !== myTeam && inSede(sd.team)),
         respawnIn: me && (me.state === 'ko' || me.state === 'dead') ? Math.max(0, (me.koTick + sample.match.respawnTicks - tick) / 60) : null,
         pointerLocked: document.pointerLockElement === this.canvas,
         lockTargetNick: target ? this.name(target.id) : null,

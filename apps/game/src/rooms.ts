@@ -1,4 +1,4 @@
-import { type CharacterVisual, type LobbyServerMessage, type MatchTicketClaims, ROOM, type RoomInfo, type RoomSummary, type TeamSide } from '@torcidas/shared';
+import { type CharacterVisual, isTeam, type LobbyServerMessage, type MatchTicketClaims, ROOM, type RoomInfo, type RoomSummary, type TeamSide } from '@torcidas/shared';
 import { randomInt, randomUUID } from 'node:crypto';
 
 // Salas: lobby + partidas. O líder configura (bots, pública/privada, expulsar) e começa;
@@ -127,7 +127,7 @@ export class Room {
 
   setBots(by: string, team: TeamSide, count: number): RoomError | null {
     if (by !== this.leaderId) return 'so_o_lider';
-    if ((team !== 0 && team !== 1) || !Number.isInteger(count)) return 'invalido';
+    if (!isTeam(team) || !Number.isInteger(count)) return 'invalido';
     this.bots[team] = Math.max(0, Math.min(count, ROOM.maxPerTeam - this.humans(team)));
     if (this.match?.playing) this.match.setBots(team, this.bots[team]);
     this.broadcast();

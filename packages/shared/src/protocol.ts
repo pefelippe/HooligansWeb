@@ -2,7 +2,7 @@ import { type Fighter, type FighterStateName, hasArmor, isInvulnerable } from '.
 import type { GasCloud, SimState, Throwable } from './combat/sim';
 import { DEFAULT_COMBAT_DATA } from './combat/weapons';
 import type { PlayerInput } from './combat/input';
-import type { TeamSide, Vec2 } from './combat/types';
+import type { PerTeam, TeamSide, Vec2 } from './combat/types';
 import type { ControlPointState, MatchEvent, MatchResult, MatchState, RosterEntry } from './match';
 import type { CharacterVisual } from './visual';
 
@@ -50,7 +50,7 @@ export interface RoomInfo {
   fase: 'lobby' | 'playing';
   players: RoomPlayer[];
   /** Bots configurados por time. */
-  bots: [number, number];
+  bots: PerTeam;
 }
 
 /** Linha da lista de salas públicas. */
@@ -138,7 +138,7 @@ export interface FighterSnapshot {
 }
 
 export interface MatchSnapshotInfo {
-  score: [number, number];
+  score: PerTeam;
   ticksLeft: number;
   phase: MatchState['phase'];
   /** Respawn atual (ticks): cresce ao longo da partida. */
@@ -146,7 +146,7 @@ export interface MatchSnapshotInfo {
   /** Pontos de controle (a posição vem do mapa). */
   points: Pick<ControlPointState, 'id' | 'owner' | 'capTeam' | 'progress' | 'contested'>[];
   /** Parte do placar que veio dos pontos. */
-  pointScore: [number, number];
+  pointScore: PerTeam;
 }
 
 export function toMatchInfo(m: MatchState, ticksLeft: number): MatchSnapshotInfo {
