@@ -7,7 +7,7 @@ import type { ControlPointState, MatchEvent, MatchResult, MatchState, RosterEntr
 import type { CharacterVisual } from './visual';
 
 // Protocolo cliente <-> game server (JSON por enquanto; binário depois do marco de netcode).
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 6;
 
 /** Claims do ticket JWT emitido pela API ao entrar na fila. */
 export interface MatchTicketClaims {
@@ -84,7 +84,8 @@ export type LobbyServerMessage =
 
 export type ClientMessage =
   | { t: 'hello'; v: number; ticket: string }
-  | { t: 'input'; seq: number; input: PlayerInput }
+  /** `view`: tick em que o cliente desenhava os outros (compensação de lag do tiro). */
+  | { t: 'input'; seq: number; input: PlayerInput; view?: number }
   | { t: 'buy'; item: string }
   /** Roda de itens: equipa (ou pega na loja e equipa). */
   | { t: 'equip'; item: string }

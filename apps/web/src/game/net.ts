@@ -1,5 +1,6 @@
 import {
   type ClientMessage,
+  decodeSnapshot,
   type Fighter,
   type FighterSnapshot,
   type GasCloud,
@@ -53,16 +54,23 @@ export class GameConnection {
   private ws: WebSocket;
   private snaps: Snap[] = [];
   private seq = 0;
+  /** Tick em que os outros estão sendo desenhados (vai com o input, para o servidor conferir o tiro). */
+  private viewTick: number | null = null;
   rtt = 0;
   private pingTimer: ReturnType<typeof setInterval> | undefined;
 
   constructor(url: string, ticket: string, private readonly h: NetHandlers) {
     this.ws = new WebSocket(url);
+    this.ws.binaryType = 'arraybuffer';
     this.ws.onopen = () => {
       this.send({ t: 'hello', v: PROTOCOL_VERSION, ticket });
       this.pingTimer = setInterval(() => this.send({ t: 'ping', at: performance.now() }), 2000);
     };
-    this.ws.onmessage = (ev) => this.receive(JSON.parse(String(ev.data)) as ServerMessage);
+    this.ws.onmessage = (ev) => {
+      // Snapshot chega em binário; versão diferente da do cliente é descartada (o hello já recusa).
+      const msg = typeof ev.data === 'string' ? (JSON.parse(ev.data) as ServerMessage) : decodeSnapshot(new Uint8Array(ev.data as ArrayBuffer));
+      if (msg) this.receive(msg);
+    };
     this.ws.onclose = (ev) => {
       clearInterval(this.pingTimer);
       this.h.onClose(ev.reason || `conexão encerrada (${ev.code})`);
@@ -81,7 +89,7 @@ export class GameConnection {
 
   /** Manda o input e devolve o seq usado (a predição aplica o mesmo input localmente). */
   sendInput(input: PlayerInput): number {
-    this.send({ t: 'input', seq: ++this.seq, input });
+    this.send({ t: 'input', seq: ++this.seq, input, ...(this.viewTick !== null ? { view: Math.round(this.viewTick) } : {}) });
     return this.seq;
   }
 
@@ -142,6 +150,7 @@ export class GameConnection {
     const prev = this.snaps[this.snaps.length - 2];
     const gap = prev ? l.tick - prev.tick : 2;
     const renderTick = Math.min(this.serverTick(now) - Math.max(INTERP_DELAY, gap * 2), l.tick);
+    this.viewTick = renderTick;
     let a = this.snaps[0] as Snap;
     let b = a;
     for (let i = 0; i < this.snaps.length - 1; i++) {

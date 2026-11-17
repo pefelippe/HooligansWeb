@@ -1,6 +1,6 @@
 // Smoke test ponta a ponta: sessão anônima -> perfil -> fila -> WebSocket -> partida com bots.
 // Uso: com api e game rodando (pnpm dev), rode pnpm --filter @torcidas/game smoke
-import { Buttons, PROTOCOL_VERSION, type ServerMessage } from '@torcidas/shared';
+import { Buttons, decodeSnapshot, PROTOCOL_VERSION, type ServerMessage } from '@torcidas/shared';
 import WebSocket from 'ws';
 
 const API = process.env.API_URL ?? 'http://localhost:3000';
@@ -25,7 +25,8 @@ async function player(nick: string, torcidaId: string) {
   const q = (await call('/queue', 'POST', {})) as { ticket: string; serverUrl: string; matchId: string };
   const ws = new WebSocket(q.serverUrl);
   const got: ServerMessage[] = [];
-  ws.on('message', (raw) => got.push(JSON.parse(String(raw)) as ServerMessage));
+  // Snapshot chega em binário; o resto é JSON.
+  ws.on('message', (raw, binary) => got.push((binary ? decodeSnapshot(new Uint8Array(raw as Buffer)) : JSON.parse(String(raw))) as ServerMessage));
   await new Promise((r) => ws.once('open', r));
   ws.send(JSON.stringify({ t: 'hello', v: PROTOCOL_VERSION, ticket: q.ticket }));
   return { ws, got, matchId: q.matchId, call };

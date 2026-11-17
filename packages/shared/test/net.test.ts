@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Buttons, cloneSim, createSim, InputQueue, type PlayerInput, Predictor, step, toSnapshot } from '../src';
+import { Buttons, cloneSim, createSim, DEFAULT_COMBAT_DATA, InputQueue, NEUTRAL_INPUT, type PlayerInput, Predictor, step, toSnapshot } from '../src';
 
 const inp = (buttons = 0, moveX = 0, moveZ = 0, aim = 0): PlayerInput => ({ moveX, moveZ, aim, buttons });
 
@@ -67,5 +67,26 @@ describe('predição do cliente', () => {
     const copy = cloneSim(s);
     const viaJson = JSON.parse(JSON.stringify(s.fighters[0]));
     expect(viaJson).toEqual(copy.fighters[0]);
+  });
+});
+
+describe('compensação de lag do tiro', () => {
+  it('acerta onde o atirador via o alvo, mesmo que o alvo já tenha saído da linha', () => {
+    const run = (view?: Map<string, { x: number; z: number }>) => {
+      const s = createSim([
+        { id: 'a', team: 0, pos: { x: 0, z: 0 }, facing: 0, weapon: 'pistola' },
+        // Agora o alvo está 3 m para o lado (fora da linha); na tela do atirador ainda estava na frente.
+        { id: 'b', team: 1, pos: { x: 3, z: 10 }, facing: Math.PI },
+      ]);
+      const hooks = view ? { shotView: (id: string) => (id === 'a' ? view : undefined) } : undefined;
+      const hits = [];
+      for (let t = 1; t <= 12; t++) {
+        const ev = step(s, { a: { ...NEUTRAL_INPUT, aim: 0, buttons: t === 1 ? Buttons.LIGHT : 0 } }, DEFAULT_COMBAT_DATA, hooks);
+        hits.push(...ev.filter((e) => e.type === 'hit'));
+      }
+      return hits.length;
+    };
+    expect(run()).toBe(0);
+    expect(run(new Map([['b', { x: 0, z: 10 }]]))).toBe(1);
   });
 });

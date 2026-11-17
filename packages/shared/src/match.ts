@@ -2,7 +2,7 @@ import { isAlive, isStanding, type Fighter } from './combat/fsm';
 import { dist } from './combat/geometry';
 import type { PlayerInput } from './combat/input';
 import { buy, type BuyResult } from './combat/shop';
-import { createFighter, createSim, equipItem, type SimEvent, type SimState, spawnPoint, step } from './combat/sim';
+import { createFighter, createSim, equipItem, type SimEvent, type SimState, spawnPoint, step, type StepHooks } from './combat/sim';
 import { addMoney, ECONOMY } from './combat/economy';
 import { type PerTeam, perTeam, TEAM_COUNT, TEAMS, type TeamSide, TICK_RATE, type Vec2 } from './combat/types';
 import { DEFAULT_COMBAT_DATA } from './combat/weapons';
@@ -292,10 +292,10 @@ export function respawnTicksAt(m: MatchState): number {
   return Math.round(c.respawnTicks + (c.respawnTicksEnd - c.respawnTicks) * t);
 }
 
-export function stepMatch(m: MatchState, inputs: Readonly<Record<string, PlayerInput | undefined>>): MatchEvent[] {
+export function stepMatch(m: MatchState, inputs: Readonly<Record<string, PlayerInput | undefined>>, hooks?: StepHooks): MatchEvent[] {
   if (m.phase !== 'playing') return [];
   m.sim.respawnTicks = respawnTicksAt(m);
-  const events: MatchEvent[] = step(m.sim, inputs);
+  const events: MatchEvent[] = step(m.sim, inputs, DEFAULT_COMBAT_DATA, hooks);
   for (const e of events) {
     if (e.type !== 'ko') continue;
     const victim = m.sim.fighters.find((f) => f.id === e.target);

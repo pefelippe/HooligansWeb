@@ -16,3 +16,4 @@ export * from './match';
 export * from './xp';
 export * from './bots';
 export * from './net';
+export * from './codec';

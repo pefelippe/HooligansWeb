@@ -1,4 +1,4 @@
-import { type ClientMessage, isTeam, type LobbyClientMessage, type LobbyServerMessage, type MatchResult, type MatchTicketClaims, type RoomTicketClaims, type ServerMessage, type TeamSide } from '@torcidas/shared';
+import { type ClientMessage, encodeSnapshot, isTeam, type LobbyClientMessage, type LobbyServerMessage, type MatchResult, type MatchTicketClaims, type RoomTicketClaims, type ServerMessage, type TeamSide } from '@torcidas/shared';
 import { MATCH, PROTOCOL_VERSION, ROOM, TICK_MS, TICK_RATE, validateVisual } from '@torcidas/shared';
 import { jwtVerify, SignJWT } from 'jose';
 import { randomInt, randomUUID } from 'node:crypto';
@@ -176,7 +176,9 @@ wss.on('connection', (ws) => {
   let joined: { match: GameMatch; userId: string } | null = null;
   let lobby: { room: Room; userId: string; send: (msg: LobbyServerMessage) => void } | null = null;
   const send = (msg: ServerMessage) => {
-    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
+    if (ws.readyState !== ws.OPEN) return;
+    // Snapshot (30 Hz, cresce com a sala) vai em binário; o resto é JSON.
+    ws.send(msg.t === 'snapshot' ? encodeSnapshot(msg) : JSON.stringify(msg));
   };
   const sendLobby = (msg: LobbyServerMessage) => {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
@@ -233,7 +235,7 @@ wss.on('connection', (ws) => {
     }
     switch (msg.t) {
       case 'input':
-        joined.match.setInput(joined.userId, msg.seq, msg.input);
+        joined.match.setInput(joined.userId, msg.seq, msg.input, msg.view);
         break;
       case 'buy':
         joined.match.buy(joined.userId, String(msg.item));

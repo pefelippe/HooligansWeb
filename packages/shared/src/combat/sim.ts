@@ -108,6 +108,15 @@ export type SimEvent =
   | { type: 'gas'; tick: number; fighter: string; pos: Vec2 }
   | { type: 'vestBreak'; tick: number; fighter: string };
 
+/** Ganchos do servidor (a predição do cliente não usa). */
+export interface StepHooks {
+  /**
+   * Compensação de lag do tiro: posições dos outros lutadores como o atirador as via na tela
+   * quando atirou. undefined = posições atuais.
+   */
+  shotView?(shooterId: string): ReadonlyMap<string, Vec2> | undefined;
+}
+
 export interface NewFighter {
   id: string;
   team: TeamSide;
@@ -267,12 +276,12 @@ export function canRevive(s: SimState, f: Fighter, ally: Fighter, data: CombatDa
 }
 
 /** Avança a simulação um tick. Muta `s` e devolve os eventos do tick. */
-export function step(s: SimState, inputs: Readonly<Record<string, PlayerInput | undefined>>, data: CombatData = DEFAULT_COMBAT_DATA): SimEvent[] {
+export function step(s: SimState, inputs: Readonly<Record<string, PlayerInput | undefined>>, data: CombatData = DEFAULT_COMBAT_DATA, hooks?: StepHooks): SimEvent[] {
   s.tick++;
   const events: SimEvent[] = [];
   for (const f of s.fighters) advance(s, f, data, events);
   for (const f of s.fighters) processInput(s, f, sanitizeInput(inputs[f.id] ?? { ...NEUTRAL_INPUT, aim: f.facing }, f.facing), data, events);
-  resolveHits(s, data, events);
+  resolveHits(s, data, events, hooks);
   updateThrowables(s, data, events);
   for (const f of s.fighters) endOfTick(s, f, data, events);
   separate(s, data);
@@ -741,7 +750,7 @@ interface PendingHit {
   move: ActiveMove;
 }
 
-function resolveHits(s: SimState, data: CombatData, events: SimEvent[]): void {
+function resolveHits(s: SimState, data: CombatData, events: SimEvent[], hooks?: StepHooks): void {
   const c = data.constants;
   // Coleta antes de aplicar: dois golpes ativos no mesmo tick trocam (trade) em vez de
   // depender da ordem dos jogadores no array.
@@ -758,12 +767,13 @@ function resolveHits(s: SimState, data: CombatData, events: SimEvent[]): void {
       }
     }
     // Tiro: uma bala, um alvo (o mais perto na linha), e só se nenhum obstáculo estiver no caminho.
-    const shotTarget = m.def.shot ? firstInLine(s, a, m, c.hurtRadius) : undefined;
+    const shotTarget = m.def.shot ? firstInLine(s, a, m, c.hurtRadius, hooks?.shotView?.(a.id)) : undefined;
     for (const t of s.fighters) {
       if (m.def.shot && t !== shotTarget) continue;
       if (t === a || t.team === a.team || m.hitIds.includes(t.id) || !isAlive(t)) continue;
       if (m.def.low && t.y > c.kickMaxTargetHeight) continue; // pulou o golpe baixo
-      if (!hitboxOverlaps(m.def.hitbox, a.pos, a.facing, t.pos, c.hurtRadius)) continue;
+      // O tiro já foi conferido em firstInLine (com as posições que o atirador via).
+      if (!m.def.shot && !hitboxOverlaps(m.def.hitbox, a.pos, a.facing, t.pos, c.hurtRadius)) continue;
       if (isInvulnerable(t, s.tick, c)) {
         // Esquiva perfeita: o golpe passou pelos i-frames logo no começo da esquiva.
         if (t.state === 'dodge' && t.stateTick <= c.dodge.perfectWindow && !m.dodgedIds.includes(t.id)) {
@@ -785,16 +795,18 @@ function resolveHits(s: SimState, data: CombatData, events: SimEvent[]): void {
 const SHOT_FROM_Y = 1.35;
 const SHOT_TO_Y = 1.2;
 
-function firstInLine(s: SimState, a: Fighter, m: ActiveMove, hurtRadius: number): Fighter | undefined {
+function firstInLine(s: SimState, a: Fighter, m: ActiveMove, hurtRadius: number, view?: ReadonlyMap<string, Vec2>): Fighter | undefined {
   if (m.hitIds.length) return undefined; // a bala já acertou alguém
+  const at = (t: Fighter) => view?.get(t.id) ?? t.pos;
   let best: Fighter | undefined;
   for (const t of s.fighters) {
     if (t === a || t.team === a.team || !isAlive(t)) continue;
-    if (!hitboxOverlaps(m.def.hitbox, a.pos, a.facing, t.pos, hurtRadius)) continue;
-    if (!best || dist(a.pos, t.pos) < dist(a.pos, best.pos)) best = t;
+    if (!hitboxOverlaps(m.def.hitbox, a.pos, a.facing, at(t), hurtRadius)) continue;
+    if (!best || dist(a.pos, at(t)) < dist(a.pos, at(best))) best = t;
   }
   if (!best || !s.collision) return best;
-  const blocked = segmentBoxHit(s.collision.boxes, { x: a.pos.x, y: SHOT_FROM_Y, z: a.pos.z }, { x: best.pos.x, y: SHOT_TO_Y, z: best.pos.z }) < 1;
+  const to = at(best);
+  const blocked = segmentBoxHit(s.collision.boxes, { x: a.pos.x, y: SHOT_FROM_Y, z: a.pos.z }, { x: to.x, y: SHOT_TO_Y, z: to.z }) < 1;
   return blocked ? undefined : best;
 }
 

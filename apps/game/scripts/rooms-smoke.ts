@@ -1,7 +1,7 @@
 // Smoke test das salas, ponta a ponta: criar sala -> entrar por código -> bots -> começar ->
 // os dois entram na partida -> líder expulsa -> expulso não volta.
 // Uso: com api e game rodando (pnpm dev), rode pnpm --filter @torcidas/game rooms-smoke
-import { type LobbyServerMessage, PROTOCOL_VERSION, type RoomInfo, type ServerMessage } from '@torcidas/shared';
+import { decodeSnapshot, type LobbyServerMessage, PROTOCOL_VERSION, type RoomInfo, type ServerMessage } from '@torcidas/shared';
 import WebSocket from 'ws';
 
 const API = process.env.API_URL ?? 'http://localhost:3000';
@@ -30,7 +30,8 @@ async function connect<T>(url: string, hello: unknown) {
   const ws = new WebSocket(url);
   const got: T[] = [];
   let closeCode: number | null = null;
-  ws.on('message', (raw) => got.push(JSON.parse(String(raw)) as T));
+  // Snapshot chega em binário; o resto é JSON.
+  ws.on('message', (raw, binary) => got.push((binary ? decodeSnapshot(new Uint8Array(raw as Buffer)) : JSON.parse(String(raw))) as T));
   ws.on('close', (code) => (closeCode = code));
   await new Promise((r) => ws.once('open', r));
   ws.send(JSON.stringify(hello));

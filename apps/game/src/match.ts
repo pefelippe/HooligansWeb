@@ -15,11 +15,13 @@ import {
   type RosterEntry,
   type ServerMessage,
   stepMatch,
+  type StepHooks,
   type TeamSide,
   ticksLeft,
   toMatchInfo,
   toSnapshot,
   type CharacterVisual,
+  type Vec2,
 } from '@torcidas/shared';
 
 const SNAPSHOT_EVERY = 2; // 60 Hz de simulação, 30 Hz de snapshot
@@ -50,12 +52,28 @@ export interface MatchOptions {
   roomId?: string;
 }
 
+/**
+ * Compensação de lag do tiro: até 15 ticks (250 ms) para trás. Mais que isso, quem tem ping alto
+ * mira um pouco à frente. O cliente diz o que via (`view`); mentir só rende até esse teto.
+ */
+const MAX_REWIND = 15;
+
 /** Uma partida. Na fila rápida, 10×10 com bots nas vagas sem humano; numa sala, o líder define os bots. */
 export class GameMatch {
   readonly state: MatchState;
   private readonly clients = new Map<string, MatchClient>();
   private readonly inputs = new Map<string, InputQueue>();
   private readonly brains = new Map<string, BotBrain>();
+  /** Posições dos lutadores nos últimos MAX_REWIND ticks (por tick). */
+  private readonly history = new Map<number, Map<string, Vec2>>();
+  /** Atraso de cada cliente em ticks: o tick atual menos o tick que ele estava vendo. */
+  private readonly lag = new Map<string, number>();
+  private readonly hooks: StepHooks = {
+    shotView: (id) => {
+      const l = this.lag.get(id);
+      return l ? this.history.get(this.state.sim.tick - l) : undefined;
+    },
+  };
   private botSeq = 0;
   /** Vaga de bot por time: o bot N tem a mesma "personalidade" nos dois times (partida justa). */
   private readonly botSlot: [number, number] = [0, 0];
@@ -159,7 +177,8 @@ export class GameMatch {
     }
   }
 
-  setInput(userId: string, seq: number, input: PlayerInput): void {
+  setInput(userId: string, seq: number, input: PlayerInput, view?: unknown): void {
+    if (typeof view === 'number' && Number.isFinite(view)) this.lag.set(userId, Math.max(0, Math.min(MAX_REWIND, Math.round(this.state.sim.tick - view))));
     let q = this.inputs.get(userId);
     if (!q) this.inputs.set(userId, (q = new InputQueue()));
     q.push(seq, input);
@@ -175,6 +194,12 @@ export class GameMatch {
     this.clients.get(userId)?.send({ t: 'buyResult', ok: r.ok, item, ...(r.ok ? {} : { reason: r.reason }) });
   }
 
+  private recordHistory(): void {
+    const sim = this.state.sim;
+    this.history.set(sim.tick, new Map(sim.fighters.map((f) => [f.id, { x: f.pos.x, z: f.pos.z }])));
+    this.history.delete(sim.tick - MAX_REWIND - 1);
+  }
+
   /** Um tick de simulação. Devolve a duração em ms (para /metrics). */
   tick(): number {
     if (!this.playing) return 0;
@@ -184,7 +209,8 @@ export class GameMatch {
     // Se faltar, repete o último: seguro, porque ações só disparam na borda do botão.
     for (const [id, q] of this.inputs) inputs[id] = q.next();
     for (const [id, brain] of this.brains) inputs[id] = botInput(this.state, brain);
-    const events = stepMatch(this.state, inputs);
+    const events = stepMatch(this.state, inputs, this.hooks);
+    this.recordHistory();
     if (events.length) this.broadcast({ t: 'events', events });
     const sim = this.state.sim;
     const every = sim.fighters.length > BIG_MATCH ? SNAPSHOT_EVERY_BIG : SNAPSHOT_EVERY;
